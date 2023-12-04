@@ -1,0 +1,24 @@
+{
+    "include": [
+        "gpt_blazing",
+        "tests",
+    ],
+    "exclude": [
+        "**/__pycache__",
+    ],
+    "stubPath": ".github/typings",
+    "pythonVersion": "3.8",
+    "pythonPlatform": "Linux",
+    "typeCheckingMode": "strict",
+    "extraPaths": [],
+    "reportUnknownParameterType": false,
+    "reportUnknownVariableType": false,
+    "reportUnknownMemberType": false,
+    "reportUnknownArgumentType": false,
+    "reportUnknownLambdaType": false,
+    "reportMissingTypeArgument": false,
+    "reportUnusedImport": false,
+    "reportMissingTypeStubs": false,
+    "reportImportCycles": false,
+    "reportUnnecessaryIsInstance": false
+}

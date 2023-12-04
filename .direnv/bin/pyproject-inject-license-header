@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -eo pipefail
+trap "echo 'error: Script failed: see failed command above'" ERR
+
+PYTHON_SCRIPT=$(
+cat << 'EOF'
+
+import sys
+import os.path
+import iolite as io
+
+assert len(sys.argv) == 3
+_, license_txt, code_folder = sys.argv
+
+license_header_lines = []
+for line in io.read_text_lines(license_txt, strip=True):
+    line = '# ' + line
+    line = line.strip()
+    license_header_lines.append(line)
+license_header = '\n'.join(license_header_lines) + '\n'
+
+code_fd = io.folder(code_folder, exists=True)
+for py_file in code_fd.glob('**/*.py'):
+    text = py_file.read_text()
+    if text.startswith(license_header):
+        print(f'skip {py_file} since license header was injected.')
+        continue
+    py_file.write_text(license_header + text)
+    print(f'license header is injected to {py_file}.')
+
+EOF
+)
+
+python -c "$PYTHON_SCRIPT" "$1" "$2"

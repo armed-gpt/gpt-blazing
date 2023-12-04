@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -eo pipefail
+trap "echo 'error: Script failed: see failed command above'" ERR
+
+
+function pyproject_install_deps {
+    # Parse arguments.
+    local arg pip_cache_folder pip_install_tag
+
+    while getopts 'c:t' arg ; do
+        case "$arg" in
+            c) pip_cache_folder=${OPTARG} ;;
+            t) pip_install_tag=${OPTARG} ;;
+            *) return 1
+        esac
+    done
+
+    if [ -z "$pip_install_tag" ] ; then
+        pip_install_tag=dev
+    fi
+    echo "pip_install_tag=${pip_install_tag}"
+
+    if [ -n "$pip_cache_folder" ] ; then
+        if [ ! -d "$pip_cache_folder" ] ; then
+            echo "pip_cache_folder=${pip_cache_folder} is not a folder, abort"
+            return 1
+        fi
+        pip download "$(pwd)[${pip_install_tag}]" --dest "$pip_cache_folder"
+        pip install -e "$(pwd)[${pip_install_tag}]" --no-index --find-links="file://${pip_cache_folder}"
+    else
+        pip install -e "$(pwd)[${pip_install_tag}]"
+    fi
+
+    exit_code="$?"
+    if [ "$exit_code" -ne 0 ] ; then
+        echo "Failed install dependencies, abort"
+    fi
+    return "$exit_code"
+}
+
+
+pyproject_install_deps "$@"
