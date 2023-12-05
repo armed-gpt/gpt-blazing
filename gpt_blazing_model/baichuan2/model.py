@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Sequence
+from typing import Optional, Tuple
 import math
 
 import attrs
@@ -20,6 +20,7 @@ class Baichuan2ModelConfig:
     pad_token_id: int = 0
     rms_norm_eps: float = 1e-06
     vocab_size: int = 125696
+    debug: bool = False
 
 
 def _get_interleave(n: int):
@@ -115,8 +116,16 @@ class BaichuanAttention(torch.nn.Module):
             config.model_max_length,
             self.head_dim,
         )
-        self.register_buffer('k_cache', torch.zeros(cache_shape, dtype=self.W_pack.weight.dtype))
-        self.register_buffer('v_cache', torch.zeros(cache_shape, dtype=self.W_pack.weight.dtype))
+        self.register_buffer(
+            'k_cache',
+            torch.zeros(cache_shape, dtype=self.W_pack.weight.dtype),
+            persistent=False,
+        )
+        self.register_buffer(
+            'v_cache',
+            torch.zeros(cache_shape, dtype=self.W_pack.weight.dtype),
+            persistent=False,
+        )
 
     def forward(
         self,
@@ -126,9 +135,9 @@ class BaichuanAttention(torch.nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         # 1. q_len >= 1 for prefilling.
         # 2. q_len = 1 for generating.
-        bsz, q_len, _ = hidden_states.size()
+        _, q_len, _ = hidden_states.size()
         # TODO: bachify.
-        assert bsz == 1
+        bsz = 1
 
         proj = self.W_pack(hidden_states)
         proj = (proj.unflatten(-1, (3, self.hidden_size)).unsqueeze(0).transpose(0, -2).squeeze(-2))
@@ -138,25 +147,20 @@ class BaichuanAttention(torch.nn.Module):
         value_states = (proj[2].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2))
 
         # input_pos: [q_len]
-        self.k_cache[:bsz, :, input_pos] = key_states
-        self.v_cache[:bsz, :, input_pos] = value_states
+        self.k_cache[:, :, input_pos] = key_states
+        self.v_cache[:, :, input_pos] = value_states
 
-        s_len = input_pos[-1] + 1
-        key_states = self.k_cache[:bsz, :, :s_len]
-        value_states = self.v_cache[:bsz, :, :s_len]
+        key_states = self.k_cache
+        value_states = self.v_cache
 
-        # attention_mask: [batch_size, num_heads, seq, seq]
-        with torch.backends.cuda.sdp_kernel(
-            enable_flash=True,
-            enable_math=True,
-            enable_mem_efficient=True,
-        ):
-            attn_output = F.scaled_dot_product_attention(
-                query_states,
-                key_states,
-                value_states,
-                attn_mask=attention_mask[:bsz, :, input_pos, :s_len],
-            )
+        # attention_mask: [num_heads, seq, seq]
+        attn_output = F.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=attention_mask[:, input_pos].unsqueeze(0),
+        )
+
         attn_output = attn_output.transpose(1, 2)
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
@@ -169,6 +173,7 @@ class BaichuanLayer(torch.nn.Module):
 
     def __init__(self, config: Baichuan2ModelConfig):
         super().__init__()
+        self.debug = config.debug
         self.hidden_size = config.hidden_size
         self.self_attn = BaichuanAttention(config=config)
         self.mlp = MLP(
@@ -184,6 +189,12 @@ class BaichuanLayer(torch.nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ):
+        if self.debug:
+            layer_device = self.input_layernorm.weight.device
+            input_pos = input_pos.to(layer_device)
+            hidden_states = hidden_states.to(layer_device)
+            attention_mask = attention_mask.to(layer_device)
+
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -233,12 +244,12 @@ class Baichuan2Model(torch.nn.Module):
         self.config = config
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
+        # [num_heads, model_max_length, model_max_length]
         self.register_buffer(
             "alibi_mask",
             _gen_alibi_mask(config.num_attention_heads, config.model_max_length),
             persistent=False,
         )
-        self.alibi_mask_nan_to_num_executed = False
 
         self.layers = torch.nn.ModuleList([
             BaichuanLayer(config) for _ in range(config.num_hidden_layers)
@@ -247,38 +258,15 @@ class Baichuan2Model(torch.nn.Module):
 
         self.lm_head = NormHead(config.hidden_size, config.vocab_size)
 
-    def to_devices(self, device_and_layer_begin_pairs: Sequence[Tuple[str, int]]):
-        assert device_and_layer_begin_pairs
-        device0 = device_and_layer_begin_pairs[0][0]
-        self.embed_tokens.to(device0)
-        self.alibi_mask.to(device0)
-
-        for pair_idx, (device, layer_begin) in enumerate(device_and_layer_begin_pairs):
-            if pair_idx + 1 < len(device_and_layer_begin_pairs):
-                layer_end = device_and_layer_begin_pairs[pair_idx + 1][1]
-            else:
-                layer_end = len(self.layers)
-
-            for layer_idx in range(layer_begin, layer_end):
-                self.layers[layer_idx].to(device)
-
-        device1 = device_and_layer_begin_pairs[-1][0]
-        self.norm.to(device1)
-        self.lm_head.to(device1)
-
     def forward(self, input_pos: torch.Tensor, input_ids: torch.Tensor):
         inputs_embeds = self.embed_tokens(input_ids)
-
-        if not self.alibi_mask_nan_to_num_executed:
-            self.alibi_mask.nan_to_num_()
-            self.alibi_mask_nan_to_num_executed = True
 
         hidden_states = inputs_embeds
         for layer in self.layers:
             hidden_states = layer(
                 input_pos=input_pos,
                 hidden_states=hidden_states,
-                attention_mask=self.attention_mask,
+                attention_mask=self.alibi_mask,
             )
         hidden_states = self.norm(hidden_states)
 
