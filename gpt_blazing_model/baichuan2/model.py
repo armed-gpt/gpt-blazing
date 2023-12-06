@@ -5,6 +5,7 @@ import attrs
 import torch
 from torch import nn
 from torch.nn import functional as F
+import torch.utils._device
 
 
 # Defaults to 13b.
@@ -132,12 +133,11 @@ class BaichuanAttention(torch.nn.Module):
 
     def forward(
         self,
-        input_pos: torch.Tensor,
+        begin: int,
+        end: int,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        # 1. q_len >= 1 for prefilling.
-        # 2. q_len = 1 for generating.
         _, q_len, _ = hidden_states.size()
         # TODO: bachify.
         bsz = 1
@@ -150,17 +150,18 @@ class BaichuanAttention(torch.nn.Module):
         value_states = (proj[2].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2))
 
         # input_pos: [q_len]
-        self.k_cache[:, :, input_pos] = key_states
-        self.v_cache[:, :, input_pos] = value_states
+        self.k_cache[:, :, begin:end] = key_states
+        self.v_cache[:, :, begin:end] = value_states
 
-        key_states = self.k_cache
-        value_states = self.v_cache
+        key_states = self.k_cache[:, :, :end]
+        value_states = self.v_cache[:, :, :end]
 
         # attention_mask: [num_heads, seq, seq]
         if self.use_original_attn_impl:
-            attn_weights = torch.matmul(query_states,
-                                        key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-            attn_weights = attn_weights + attention_mask[:, input_pos].unsqueeze(0)
+            attn_weights = (
+                torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+            )
+            attn_weights = attn_weights + attention_mask[:, :end, :end].unsqueeze(0)
             attn_weights = torch.max(
                 attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
             )
@@ -180,7 +181,7 @@ class BaichuanAttention(torch.nn.Module):
                 query_states,
                 key_states,
                 value_states,
-                attn_mask=attention_mask[:, input_pos].unsqueeze(0),
+                attn_mask=attention_mask[:, :end, :end].unsqueeze(0),
             )
 
         attn_output = attn_output.transpose(1, 2)
@@ -207,13 +208,13 @@ class BaichuanLayer(torch.nn.Module):
 
     def forward(
         self,
-        input_pos: torch.Tensor,
+        begin: int,
+        end: int,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ):
         if self.debug:
             layer_device = self.input_layernorm.weight.device
-            input_pos = input_pos.to(layer_device)
             hidden_states = hidden_states.to(layer_device)
             attention_mask = attention_mask.to(layer_device)
 
@@ -223,7 +224,8 @@ class BaichuanLayer(torch.nn.Module):
 
         # Self Attention
         hidden_states = self.self_attn(
-            input_pos=input_pos,
+            begin=begin,
+            end=end,
             hidden_states=hidden_states,
             attention_mask=attention_mask,
         )
@@ -280,13 +282,19 @@ class Baichuan2Model(torch.nn.Module):
 
         self.lm_head = NormHead(config.hidden_size, config.vocab_size)
 
-    def forward(self, input_pos: torch.Tensor, input_ids: torch.Tensor):
+    def forward(
+        self,
+        begin: int,
+        end: int,
+        input_ids: torch.Tensor,
+    ):
         inputs_embeds = self.embed_tokens(input_ids)
 
         hidden_states = inputs_embeds
         for layer in self.layers:
             hidden_states = layer(
-                input_pos=input_pos,
+                begin=begin,
+                end=end,
                 hidden_states=hidden_states,
                 attention_mask=self.alibi_mask,
             )
@@ -354,28 +362,82 @@ class WeightOnlyInt8Linear(torch.nn.Module):
         return F.linear(input, self.weight.to(dtype=input.dtype)) * self.scales
 
 
-def replace_linear_weight_only_int8_per_channel(module):  # type: ignore
+# http://www.lernapparat.de/faster-model-init
+class EmptyInitOnDevice(torch.overrides.TorchFunctionMode):  # type: ignore
+
+    def __init__(self, device=None):  # type: ignore
+        self.device = device
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):  # type: ignore
+        kwargs = kwargs or {}
+        if getattr(func, '__module__', None) == 'torch.nn.init':
+            if 'tensor' in kwargs:
+                return kwargs['tensor']
+            else:
+                return args[0]
+        device_constructors = torch.utils._device._device_constructors()  # type: ignore
+        if (
+            self.device is not None and func in device_constructors and kwargs.get('device') is None
+        ):
+            kwargs['device'] = self.device
+        return func(*args, **kwargs)
+
+
+def replace_linear_weight_only_int8_per_channel(module, struct_only):  # type: ignore
     for name, child in module.named_children():
         if isinstance(child, nn.Linear):
             assert not child.bias
 
-            with torch.no_grad():
-                int8_weight, scales, _ = dynamically_quantize_per_channel(
-                    child.weight.float(), -128, 127, torch.int8
-                )
+            with EmptyInitOnDevice():
+                int8_linear = WeightOnlyInt8Linear(child.in_features, child.out_features)
 
-            int8_linear = WeightOnlyInt8Linear(child.in_features, child.out_features)
-            int8_linear.load_state_dict({
-                'weight': int8_weight,
-                'scales': scales,
-            })
+            if not struct_only:
+                with torch.no_grad():
+                    int8_weight, scales, _ = dynamically_quantize_per_channel(
+                        child.weight.float(), -128, 127, torch.int8
+                    )
+                int8_linear.load_state_dict({
+                    'weight': int8_weight,
+                    'scales': scales,
+                })
 
             setattr(module, name, int8_linear)
 
         else:
-            replace_linear_weight_only_int8_per_channel(child)
+            replace_linear_weight_only_int8_per_channel(child, struct_only)
 
 
-def quantize_int8(model: Baichuan2Model):
-    replace_linear_weight_only_int8_per_channel(model)
+def quantize_int8(model: Baichuan2Model, struct_only: bool = False):
+    replace_linear_weight_only_int8_per_channel(model, struct_only)
     return model
+
+
+def load_model(
+    model_pt: str,
+    config: Optional[Baichuan2ModelConfig] = None,
+    q8: bool = True,
+):
+    if config is None:
+        config = Baichuan2ModelConfig()
+
+    model = Baichuan2Model(config)
+    model.eval()
+    model.half()
+
+    if q8:
+        model = quantize_int8(model, struct_only=True)
+
+    model.load_state_dict(torch.load(model_pt, map_location='cpu'))
+
+    return model
+
+
+def prefill_model(model: Baichuan2Model, input_ids: torch.Tensor, begin: int = 0, end: int = -1):
+    if end < 0:
+        end = input_ids.shape[1]
+    logits = model(begin=begin, end=end, input_ids=input_ids)
+    return logits
+
+
+def get_compiled_prefill_model():
+    return torch.compile(prefill_model, mode="reduce-overhead", fullgraph=True, dynamic=True)

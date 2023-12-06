@@ -2,33 +2,16 @@ from typing import Tuple, Sequence, Optional
 
 import torch
 import torch.nn.functional as F
-import torch.utils._device
 import sentencepiece as spm
 import iolite as io
 
-from .model import Baichuan2Model, Baichuan2ModelConfig, quantize_int8
-
-
-# http://www.lernapparat.de/faster-model-init
-class EmptyInitOnDevice(torch.overrides.TorchFunctionMode):  # type: ignore
-
-    def __init__(self, device=None):  # type: ignore
-        self.device = device
-
-    def __torch_function__(self, func, types, args=(), kwargs=None):  # type: ignore
-        kwargs = kwargs or {}
-        if getattr(func, '__module__', None) == 'torch.nn.init':
-            if 'tensor' in kwargs:
-                return kwargs['tensor']
-            else:
-                return args[0]
-        device_constructors = torch.utils._device._device_constructors()  # type: ignore
-        if (
-            self.device is not None and func in device_constructors and kwargs.get('device') is None
-        ):
-            kwargs['device'] = self.device
-        return func(*args, **kwargs)
-
+from .model import (
+    Baichuan2Model,
+    Baichuan2ModelConfig,
+    quantize_int8,
+    EmptyInitOnDevice,
+    get_compiled_prefill_model,
+)
 
 BAICHUAN2_13B_MODEL_FOLDER = str(
     io.folder(
@@ -147,9 +130,8 @@ fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
 
     input_ids = generate_debug_input_ids(model_folder)
     input_ids = input_ids.to('cuda:0')
-    input_pos = torch.arange(0, input_ids.size(1), device=input_ids.device)
     with torch.inference_mode():
-        logits = model(input_pos=input_pos, input_ids=input_ids)
+        logits = model(begin=0, end=input_ids.shape[1], input_ids=input_ids)
 
     print('Saving to', output_file)
     torch.save(logits, output_file)
@@ -228,3 +210,69 @@ fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     rank = tpsi0 == tpsi1
     r = rank.sum() / rank.numel()
     print(r)
+
+
+def slice_opt0(x: torch.Tensor, input_pos: torch.Tensor):
+    end = input_pos[-1] + 1
+    return x[:end]
+
+
+def slice_opt1(x: torch.Tensor, end: int):
+    return x[:end]
+
+
+def slice_opt2(x: torch.Tensor, y: torch.Tensor, end: Optional[int]):
+    if end is None:
+        end = y.shape[1]
+    return x[:end]
+
+
+def debug_compile_slice_opt():
+    try:
+        opt = torch.compile(slice_opt0, mode="reduce-overhead", fullgraph=True)
+        print(opt(torch.arange(10), torch.tensor([5])))
+        print('slice_opt0: good')
+    except Exception:
+        print('slice_opt0: failed')
+
+    opt = torch.compile(slice_opt1, mode="reduce-overhead", fullgraph=True)
+    print(opt(torch.arange(10), 6))
+
+    try:
+        opt = torch.compile(slice_opt2, mode="reduce-overhead", fullgraph=True)
+        print(opt(torch.arange(10), torch.tensor([[1] * 5]), None))
+        print(opt(torch.arange(10), torch.tensor([[1] * 5]), 3))
+        print('slice_opt2: good')
+    except Exception:
+        print('slice_opt2: failed')
+
+
+def debug_get_compiled_prefill_model():
+    model = load_and_convert_to_model()
+    model = quantize_int8(model)
+    model.to('cuda:0')
+
+    input_ids = generate_debug_input_ids()
+    input_ids = input_ids.to('cuda:0')
+
+    prefill_model = get_compiled_prefill_model()
+    with torch.inference_mode():
+        logits = prefill_model(model, input_ids)
+    print(logits)
+
+
+def export_model(
+    output_file: str,
+    model_folder: str = BAICHUAN2_13B_MODEL_FOLDER,
+    q8: bool = False,
+):
+    '''
+fib gpt_blazing_model/baichuan2/debug.py:export_model \
+    --output_file="$GPT_BLAZING_DATA/model/baichuan2/13b-q8.pt" \
+    --q8
+    '''
+    model = load_and_convert_to_model(model_folder)
+    if q8:
+        model = quantize_int8(model)
+
+    torch.save(model.state_dict(), output_file)
