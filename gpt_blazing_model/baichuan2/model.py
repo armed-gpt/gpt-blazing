@@ -275,7 +275,6 @@ class Baichuan2Model(torch.nn.Module):
         return logits
 
 
-##### Quantization Primitives ######
 def dynamically_quantize_per_channel(x, quant_min, quant_max, target_dtype):  # type: ignore
     # assumes symmetric quantization
     # assumes axis == 0
@@ -302,7 +301,8 @@ def dynamically_quantize_per_channel(x, quant_min, quant_max, target_dtype):  # 
     zero_points = torch.zeros(min_val_neg.size(), dtype=torch.int64, device=device)
 
     # quantize based on qmin/qmax/scales/zp
-    # reference: https://www.internalfb.com/code/fbsource/[8edc275012b1]/fbcode/caffe2/torch/ao/quantization/fx/_decomposed.py?lines=63
+    # reference:
+    # https://www.internalfb.com/code/fbsource/[8edc275012b1]/fbcode/caffe2/torch/ao/quantization/fx/_decomposed.py?lines=63
     x_div = x / scales.unsqueeze(-1)
     x_round = torch.round(x_div)
     x_zp = x_round + zero_points.unsqueeze(-1)
@@ -311,7 +311,6 @@ def dynamically_quantize_per_channel(x, quant_min, quant_max, target_dtype):  # 
     return quant, scales, zero_points
 
 
-##### Weight-only int8 per-channel quantized code ######
 class WeightOnlyInt8Linear(torch.nn.Module):
     __constants__ = ['in_features', 'out_features']
     in_features: int
