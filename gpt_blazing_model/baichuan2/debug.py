@@ -58,6 +58,12 @@ def load_and_convert_to_model(model_folder: str = BAICHUAN2_13B_MODEL_FOLDER):
         model = Baichuan2Model(Baichuan2ModelConfig(debug=True))
         model.half()
 
+        if not model.config.use_original_attn_impl:
+            # For scaled_dot_product_attention.
+            torch.backends.cuda.enable_flash_sdp(False)
+            torch.backends.cuda.enable_mem_efficient_sdp(False)
+            torch.backends.cuda.enable_math_sdp(True)
+
     baichuan_model = hf_model.model
 
     model.embed_tokens.load_state_dict(baichuan_model.embed_tokens.state_dict())
@@ -193,30 +199,25 @@ def get_top_p_sorted_indices(logits: torch.Tensor, top_p: float = 0.9):
 
 def compare_logits(file0: str, file1: str):
     '''
-# 0.9950
+# 1.
 fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/hf_logits.pt"
+
+# 0.9943
+fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
+    --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
+    --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt"
 
 # 0.9949
 fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/compiled_logits.pt"
 
-# 0.9943
-fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
-    --file0="$GPT_BLAZING_DATA/model/baichuan2/hf_logits.pt" \
-    --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt"
-
 # 0.9945
 fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
-    --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_logits.pt"
-
-# 0.9944
-fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
-    --file0="$GPT_BLAZING_DATA/model/baichuan2/q8_logits.pt" \
-    --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt"
+    --file1="$GPT_BLAZING_DATA/model/baichuan2/compiled_q8_logits.pt"
     '''
     logits0 = torch.load(file0, map_location='cuda:0')
     logits1 = torch.load(file1, map_location='cuda:0')

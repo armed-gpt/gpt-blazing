@@ -20,6 +20,7 @@ class Baichuan2ModelConfig:
     pad_token_id: int = 0
     rms_norm_eps: float = 1e-06
     vocab_size: int = 125696
+    use_original_attn_impl: bool = True
     debug: bool = False
 
 
@@ -110,6 +111,8 @@ class BaichuanAttention(torch.nn.Module):
         self.W_pack = torch.nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=False)
         self.o_proj = torch.nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
+        self.use_original_attn_impl = config.use_original_attn_impl
+
         cache_shape = (
             config.model_max_batch_size,
             self.num_heads,
@@ -154,12 +157,31 @@ class BaichuanAttention(torch.nn.Module):
         value_states = self.v_cache
 
         # attention_mask: [num_heads, seq, seq]
-        attn_output = F.scaled_dot_product_attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=attention_mask[:, input_pos].unsqueeze(0),
-        )
+        if self.use_original_attn_impl:
+            attn_weights = torch.matmul(query_states,
+                                        key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+            attn_weights = attn_weights + attention_mask[:, input_pos].unsqueeze(0)
+            attn_weights = torch.max(
+                attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
+            )
+            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
+            attn_output = torch.matmul(attn_weights, value_states)
+
+        else:
+            # https://github.com/pytorch-labs/gpt-fast/issues/31
+            # NOTE:
+            # Cannot use torch.backends.cuda.sdp_kernel() here,
+            # otherwise torch.compile raises an error:
+            # torch._dynamo.exc.Unsupported:
+            # torch.* op returned non-Tensor _GeneratorContextManager call_function
+            # <function sdp_kernel at 0x7fc067f6d550>
+            # Hence moving the settings out here.
+            attn_output = F.scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                attn_mask=attention_mask[:, input_pos].unsqueeze(0),
+            )
 
         attn_output = attn_output.transpose(1, 2)
 
