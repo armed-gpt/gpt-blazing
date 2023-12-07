@@ -21,7 +21,7 @@ class Baichuan2ModelConfig:
     pad_token_id: int = 0
     rms_norm_eps: float = 1e-06
     vocab_size: int = 125696
-    use_original_attn_impl: bool = False
+    use_original_attn_impl: bool = True
     debug: bool = False
 
 
@@ -133,8 +133,7 @@ class BaichuanAttention(torch.nn.Module):
 
     def forward(
         self,
-        begin: int,
-        end: int,
+        input_pos: torch.Tensor,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
@@ -150,18 +149,18 @@ class BaichuanAttention(torch.nn.Module):
         value_states = (proj[2].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2))
 
         # input_pos: [q_len]
-        self.k_cache[:, :, begin:end] = key_states
-        self.v_cache[:, :, begin:end] = value_states
+        self.k_cache[:, :, input_pos] = key_states
+        self.v_cache[:, :, input_pos] = value_states
 
-        key_states = self.k_cache[:, :, :end]
-        value_states = self.v_cache[:, :, :end]
+        key_states = self.k_cache
+        value_states = self.v_cache
 
         # attention_mask: [num_heads, seq, seq]
         if self.use_original_attn_impl:
             attn_weights = (
                 torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
             )
-            attn_weights = attn_weights + attention_mask[:, begin:end, :end].unsqueeze(0)
+            attn_weights = attn_weights + attention_mask[:, input_pos].unsqueeze(0)
             attn_weights = torch.max(
                 attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
             )
@@ -169,19 +168,11 @@ class BaichuanAttention(torch.nn.Module):
             attn_output = torch.matmul(attn_weights, value_states)
 
         else:
-            # https://github.com/pytorch-labs/gpt-fast/issues/31
-            # NOTE:
-            # Cannot use torch.backends.cuda.sdp_kernel() here,
-            # otherwise torch.compile raises an error:
-            # torch._dynamo.exc.Unsupported:
-            # torch.* op returned non-Tensor _GeneratorContextManager call_function
-            # <function sdp_kernel at 0x7fc067f6d550>
-            # Hence moving the settings out here.
             attn_output = F.scaled_dot_product_attention(
                 query_states,
                 key_states,
                 value_states,
-                attn_mask=attention_mask[:, begin:end, :end].unsqueeze(0),
+                attn_mask=attention_mask[:, input_pos].unsqueeze(0),
             )
 
         attn_output = attn_output.transpose(1, 2)
@@ -208,13 +199,13 @@ class BaichuanLayer(torch.nn.Module):
 
     def forward(
         self,
-        begin: int,
-        end: int,
+        input_pos: torch.Tensor,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ):
         if self.debug:
             layer_device = self.input_layernorm.weight.device
+            input_pos = input_pos.to(layer_device)
             hidden_states = hidden_states.to(layer_device)
             attention_mask = attention_mask.to(layer_device)
 
@@ -224,8 +215,7 @@ class BaichuanLayer(torch.nn.Module):
 
         # Self Attention
         hidden_states = self.self_attn(
-            begin=begin,
-            end=end,
+            input_pos=input_pos,
             hidden_states=hidden_states,
             attention_mask=attention_mask,
         )
@@ -246,17 +236,12 @@ class NormHead(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.empty((vocab_size, hidden_size)))
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        self.first_flag = True
 
     def forward(self, hidden_states: torch.Tensor):
         if self.training:
             norm_weight = nn.functional.normalize(self.weight)
-            self.first_flag = True
-        elif self.first_flag:
-            self.first_flag = False
-            self.weight.data = nn.functional.normalize(self.weight)
-            norm_weight = self.weight
         else:
+            # NOTE: normalize the state dict.
             norm_weight = self.weight
         return nn.functional.linear(hidden_states, norm_weight)
 
@@ -284,8 +269,7 @@ class Baichuan2Model(torch.nn.Module):
 
     def forward(
         self,
-        begin: int,
-        end: int,
+        input_pos: torch.Tensor,
         input_ids: torch.Tensor,
     ):
         inputs_embeds = self.embed_tokens(input_ids)
@@ -293,8 +277,7 @@ class Baichuan2Model(torch.nn.Module):
         hidden_states = inputs_embeds
         for layer in self.layers:
             hidden_states = layer(
-                begin=begin,
-                end=end,
+                input_pos=input_pos,
                 hidden_states=hidden_states,
                 attention_mask=self.alibi_mask,
             )
@@ -420,7 +403,8 @@ def load_model(
     if config is None:
         config = Baichuan2ModelConfig()
 
-    model = Baichuan2Model(config)
+    with EmptyInitOnDevice():
+        model = Baichuan2Model(config)
     model.eval()
     model.half()
 
@@ -432,19 +416,17 @@ def load_model(
     return model
 
 
-def model_prefill(model: Baichuan2Model, input_ids: torch.Tensor, begin: int = 0, end: int = -1):
-    if end < 0:
-        end = input_ids.shape[1]
-    logits = model(begin=begin, end=end, input_ids=input_ids)
+def model_prefill(model: Baichuan2Model, input_pos: torch.Tensor, input_ids: torch.Tensor):
+    logits = model(input_pos=input_pos, input_ids=input_ids)
     return logits
 
 
 def get_compiled_model_prefill():
-    return torch.compile(model_prefill, mode="reduce-overhead", fullgraph=True, dynamic=True)
+    return torch.compile(model_prefill, fullgraph=True, dynamic=True)
 
 
-def model_decode_one_token(model: Baichuan2Model, input_ids: torch.Tensor, idx: int):
-    logits = model(begin=idx, end=idx + 1, input_ids=input_ids)
+def model_decode_one_token(model: Baichuan2Model, input_pos: torch.Tensor, input_ids: torch.Tensor):
+    logits = model(input_pos=input_pos, input_ids=input_ids)
     return logits
 
 
