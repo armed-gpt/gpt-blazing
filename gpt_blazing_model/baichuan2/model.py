@@ -21,7 +21,7 @@ class Baichuan2ModelConfig:
     pad_token_id: int = 0
     rms_norm_eps: float = 1e-06
     vocab_size: int = 125696
-    use_original_attn_impl: bool = True
+    use_original_attn_impl: bool = False
     debug: bool = False
 
 
@@ -161,7 +161,7 @@ class BaichuanAttention(torch.nn.Module):
             attn_weights = (
                 torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
             )
-            attn_weights = attn_weights + attention_mask[:, :end, :end].unsqueeze(0)
+            attn_weights = attn_weights + attention_mask[:, begin:end, :end].unsqueeze(0)
             attn_weights = torch.max(
                 attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
             )
@@ -181,7 +181,7 @@ class BaichuanAttention(torch.nn.Module):
                 query_states,
                 key_states,
                 value_states,
-                attn_mask=attention_mask[:, :end, :end].unsqueeze(0),
+                attn_mask=attention_mask[:, begin:end, :end].unsqueeze(0),
             )
 
         attn_output = attn_output.transpose(1, 2)
@@ -432,12 +432,21 @@ def load_model(
     return model
 
 
-def prefill_model(model: Baichuan2Model, input_ids: torch.Tensor, begin: int = 0, end: int = -1):
+def model_prefill(model: Baichuan2Model, input_ids: torch.Tensor, begin: int = 0, end: int = -1):
     if end < 0:
         end = input_ids.shape[1]
     logits = model(begin=begin, end=end, input_ids=input_ids)
     return logits
 
 
-def get_compiled_prefill_model():
-    return torch.compile(prefill_model, mode="reduce-overhead", fullgraph=True, dynamic=True)
+def get_compiled_model_prefill():
+    return torch.compile(model_prefill, mode="reduce-overhead", fullgraph=True, dynamic=True)
+
+
+def model_decode_one_token(model: Baichuan2Model, input_ids: torch.Tensor, idx: int):
+    logits = model(begin=idx, end=idx + 1, input_ids=input_ids)
+    return logits
+
+
+def get_compiled_model_decode_one_token():
+    return torch.compile(model_decode_one_token, mode="reduce-overhead", fullgraph=True)

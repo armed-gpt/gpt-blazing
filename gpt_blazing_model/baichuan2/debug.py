@@ -10,7 +10,8 @@ from .model import (
     Baichuan2ModelConfig,
     quantize_int8,
     EmptyInitOnDevice,
-    get_compiled_prefill_model,
+    get_compiled_model_prefill,
+    get_compiled_model_decode_one_token,
 )
 
 BAICHUAN2_13B_MODEL_FOLDER = str(
@@ -247,7 +248,7 @@ def debug_compile_slice_opt():
         print('slice_opt2: failed')
 
 
-def debug_get_compiled_prefill_model():
+def debug_get_compiled_opts():
     model = load_and_convert_to_model()
     model = quantize_int8(model)
     model.to('cuda:0')
@@ -255,10 +256,29 @@ def debug_get_compiled_prefill_model():
     input_ids = generate_debug_input_ids()
     input_ids = input_ids.to('cuda:0')
 
-    prefill_model = get_compiled_prefill_model()
+    from .model import model_prefill, model_decode_one_token  # noqa
+
+    prefill = get_compiled_model_prefill()
+    # prefill = model_prefill
     with torch.inference_mode():
-        logits = prefill_model(model, input_ids)
-    print(logits)
+        prefill_logits = prefill(model, input_ids).detach()
+
+    decode_one_token = get_compiled_model_decode_one_token()
+    # decode_one_token = model_decode_one_token
+    logits_per_step = []
+    for idx in range(input_ids.shape[1]):
+        cur_input_ids = input_ids[:, idx:idx + 1]
+        with torch.inference_mode():
+            logits_per_step.append(decode_one_token(model, cur_input_ids, idx).detach())
+
+    decode_logits = torch.cat(logits_per_step, dim=1)
+
+    tpsi0 = get_top_p_sorted_indices(prefill_logits)
+    tpsi1 = get_top_p_sorted_indices(decode_logits)
+
+    rank = tpsi0 == tpsi1
+    r = rank.sum() / rank.numel()
+    print(r)
 
 
 def export_model(
