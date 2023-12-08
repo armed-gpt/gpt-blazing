@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 import math
 
 import attrs
@@ -135,6 +135,7 @@ class BaichuanAttention(torch.nn.Module):
     def forward(
         self,
         input_pos: torch.Tensor,
+        end: int,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
@@ -153,15 +154,15 @@ class BaichuanAttention(torch.nn.Module):
         self.k_cache[:, :, input_pos] = key_states
         self.v_cache[:, :, input_pos] = value_states
 
-        key_states = self.k_cache
-        value_states = self.v_cache
+        key_states = self.k_cache[:, :, :end]
+        value_states = self.v_cache[:, :, :end]
 
         # attention_mask: [num_heads, seq, seq]
         if self.use_original_attn_impl:
             attn_weights = (
                 torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
             )
-            attn_weights = attn_weights + attention_mask[:, input_pos].unsqueeze(0)
+            attn_weights = attn_weights + attention_mask[:, input_pos, :end].unsqueeze(0)
             attn_weights = torch.max(
                 attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
             )
@@ -173,7 +174,7 @@ class BaichuanAttention(torch.nn.Module):
                 query_states,
                 key_states,
                 value_states,
-                attn_mask=attention_mask[:, input_pos].unsqueeze(0),
+                attn_mask=attention_mask[:, input_pos, :end].unsqueeze(0),
             )
 
         attn_output = attn_output.transpose(1, 2)
@@ -201,6 +202,7 @@ class BaichuanLayer(torch.nn.Module):
     def forward(
         self,
         input_pos: torch.Tensor,
+        end: int,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
     ):
@@ -217,6 +219,7 @@ class BaichuanLayer(torch.nn.Module):
         # Self Attention
         hidden_states = self.self_attn(
             input_pos=input_pos,
+            end=end,
             hidden_states=hidden_states,
             attention_mask=attention_mask,
         )
@@ -256,6 +259,7 @@ class Baichuan2Model(torch.nn.Module):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
         # [num_heads, model_max_length, model_max_length]
+        # TODO: dtype issue here.
         self.register_buffer(
             "alibi_mask",
             _gen_alibi_mask(config.num_attention_heads, config.model_max_length),
@@ -284,6 +288,7 @@ class Baichuan2Model(torch.nn.Module):
     def forward(
         self,
         input_pos: torch.Tensor,
+        end: int,
         input_ids: torch.Tensor,
     ):
         inputs_embeds = self.embed_tokens(input_ids)
@@ -292,6 +297,7 @@ class Baichuan2Model(torch.nn.Module):
         for layer in self.layers:
             hidden_states = layer(
                 input_pos=input_pos,
+                end=end,
                 hidden_states=hidden_states,
                 attention_mask=self.alibi_mask,
             )
@@ -430,19 +436,67 @@ def load_model(
     return model
 
 
-def model_prefill(model: Baichuan2Model, input_pos: torch.Tensor, input_ids: torch.Tensor):
-    logits = model(input_pos=input_pos, input_ids=input_ids)
+def model_prefill_2048(
+    model: Baichuan2Model,
+    input_pos: torch.Tensor,
+    input_ids: torch.Tensor,
+):
+    logits = model(input_pos=input_pos, end=2048, input_ids=input_ids)
     return logits
 
 
-def get_compiled_model_prefill():
-    return torch.compile(model_prefill, fullgraph=True, dynamic=True)
-
-
-def model_decode_one_token(model: Baichuan2Model, input_pos: torch.Tensor, input_ids: torch.Tensor):
-    logits = model(input_pos=input_pos, input_ids=input_ids)
+def model_prefill_4096(
+    model: Baichuan2Model,
+    input_pos: torch.Tensor,
+    input_ids: torch.Tensor,
+):
+    logits = model(input_pos=input_pos, end=4096, input_ids=input_ids)
     return logits
 
 
-def get_compiled_model_decode_one_token():
-    return torch.compile(model_decode_one_token, mode="reduce-overhead", fullgraph=True)
+def compile_model_prefill(func):  # type: ignore
+    return torch.compile(func, fullgraph=True, dynamic=True)
+
+
+def model_decode_one_token_2048(
+    model: Baichuan2Model,
+    input_pos: torch.Tensor,
+    input_ids: torch.Tensor,
+):
+    logits = model(input_pos=input_pos, end=2048, input_ids=input_ids)
+    return logits
+
+
+def model_decode_one_token_4096(
+    model: Baichuan2Model,
+    input_pos: torch.Tensor,
+    input_ids: torch.Tensor,
+):
+    logits = model(input_pos=input_pos, end=4096, input_ids=input_ids)
+    return logits
+
+
+def compile_model_decode_one_token(func):  # type: ignore
+    return torch.compile(func, mode="reduce-overhead", fullgraph=True)
+
+
+def model_dispatch(
+    model: Baichuan2Model,
+    func_2048: Any,
+    func_4096: Any,
+    input_pos: torch.Tensor,
+    input_ids: torch.Tensor,
+):
+    if input_pos[-1] < 2048:
+        func = func_2048
+    else:
+        func = func_4096
+
+    # https://github.com/pytorch-labs/gpt-fast/issues/31
+    with torch.inference_mode():
+        with torch.backends.cuda.sdp_kernel(
+            enable_flash=False,
+            enable_mem_efficient=False,
+            enable_math=True,
+        ):
+            return func(model, input_pos, input_ids)

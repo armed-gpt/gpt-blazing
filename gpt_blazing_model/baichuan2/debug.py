@@ -11,9 +11,14 @@ from .model import (
     Baichuan2ModelConfig,
     quantize_int8,
     EmptyInitOnDevice,
-    get_compiled_model_prefill,
-    get_compiled_model_decode_one_token,
     load_model,
+    model_prefill_2048,
+    model_prefill_4096,
+    compile_model_prefill,
+    model_decode_one_token_2048,
+    model_decode_one_token_4096,
+    compile_model_decode_one_token,
+    model_dispatch,
 )
 from .tokenizer import Baichuan2Tokenizer
 
@@ -305,8 +310,6 @@ def debug_greedy_decoding_performance():
     )
     model.to('cuda:0')
 
-    from .model import model_prefill, model_decode_one_token  # noqa
-
     print('Compiling...')
     import torch._dynamo.config
     import torch._inductor.config
@@ -315,72 +318,81 @@ def debug_greedy_decoding_performance():
     torch._inductor.config.triton.unique_kernel_names = True
     torch._inductor.config.fx_graph_cache = True
 
-    # model = torch.compile(model, mode="reduce-overhead", fullgraph=True)
-
     input_ids = generate_debug_input_ids()
     input_ids = input_ids.to('cuda:0')
-    input_pos = torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int)
 
-    if True:
-        prefill = get_compiled_model_prefill()
-        with torch.inference_mode():
-            for _ in range(5):
-                # https://github.com/pytorch-labs/gpt-fast/issues/31
-                with torch.backends.cuda.sdp_kernel(
-                    enable_flash=False,
-                    enable_mem_efficient=False,
-                    enable_math=True,
-                ):
-                    print(
-                        'prefill compiling time:',
-                        timed(lambda: prefill(model, input_pos, input_ids))[1],
-                        input_pos,
-                        input_ids,
+    prefill_2048 = compile_model_prefill(model_prefill_2048)
+    prefill_4096 = compile_model_prefill(model_prefill_4096)
+
+    for offset in [0, 2048]:
+        for _ in range(3):
+            input_pos = torch.arange(
+                offset,
+                offset + int(input_ids.shape[1]),
+                device=input_ids.device,
+                dtype=torch.int,
+            )
+            print(
+                'prefill compiling time:',
+                timed(
+                    lambda: model_dispatch(
+                        model=model,
+                        func_2048=prefill_2048,
+                        func_4096=prefill_4096,
+                        input_pos=input_pos,
+                        input_ids=input_ids,
                     )
-    else:
-        prefill = model_prefill
+                )[1],
+            )
 
     import random
 
-    decode_one_token = get_compiled_model_decode_one_token()
+    decode_one_token_2048 = compile_model_decode_one_token(model_decode_one_token_2048)
+    decode_one_token_4096 = compile_model_decode_one_token(model_decode_one_token_4096)
     input_pos = torch.tensor([0], device=input_ids.device, dtype=torch.int)
-    for _ in range(10):
-        cur_input_ids = torch.tensor(
-            [[random.randint(0, 125696)]],
-            dtype=torch.int,
-            device='cuda:0',
-        )
-        with torch.inference_mode():
-            # https://github.com/pytorch-labs/gpt-fast/issues/31
-            with torch.backends.cuda.sdp_kernel(
-                enable_flash=False,
-                enable_mem_efficient=False,
-                enable_math=True,
-            ):
-                print(
-                    'decode_one_token compiling time:',
-                    timed(lambda: decode_one_token(model, input_pos, cur_input_ids))[1],
-                    input_pos,
-                    cur_input_ids,
-                )
-            input_pos += 1
+
+    for offset in [0, 2048]:
+        for idx in range(3):
+            input_pos[0] = offset + idx
+            cur_input_ids = torch.tensor(
+                [[random.randint(0, 125696)]],
+                dtype=torch.int,
+                device='cuda:0',
+            )
+            print(
+                'decode_one_token compiling time:',
+                timed(
+                    lambda: model_dispatch(
+                        model=model,
+                        func_2048=decode_one_token_2048,
+                        func_4096=decode_one_token_4096,
+                        input_pos=input_pos,
+                        input_ids=cur_input_ids,
+                    )
+                )[1],
+            )
 
     print('Running...')
     tokenizer = Baichuan2Tokenizer(f'{BAICHUAN2_13B_MODEL_FOLDER}/tokenizer.model')
-    input_ids = tokenizer.chat_tokenize([('user', "帮我写一篇与A股主题相关的作文，800字左右")])
-    print('input_ids:', input_ids)
-    input_ids = torch.tensor([input_ids], dtype=torch.int)
+    _input_ids = tokenizer.chat_tokenize([('user', "帮我写一篇与A股主题相关的作文，800字左右")])
+    print('input_ids:', _input_ids)
+    input_ids = torch.tensor([_input_ids], dtype=torch.int)
     input_ids = input_ids.to('cuda:0')
-    input_pos = torch.arange(0, input_ids.shape[1], device=input_ids.device, dtype=torch.int)
+    input_pos = torch.arange(0, int(input_ids.shape[1]), device=input_ids.device, dtype=torch.int)
 
     output_ids = []
 
     prefill_dt_begin = datetime.now()
-    with torch.inference_mode():
-        logits = prefill(model, input_pos, input_ids).detach()
-        logits = logits[:, -1]
-        output_id = int(torch.argmax(logits, dim=1)[0])
-        output_ids.append(output_id)
+    logits = model_dispatch(
+        model=model,
+        func_2048=prefill_2048,
+        func_4096=prefill_4096,
+        input_pos=input_pos,
+        input_ids=input_ids,
+    ).detach()
+    logits = logits[:, -1]
+    output_id = int(torch.argmax(logits, dim=1)[0])
+    output_ids.append(output_id)
     prefill_dt_end = datetime.now()
 
     prefill_dt_delta = prefill_dt_end - prefill_dt_begin
@@ -390,22 +402,18 @@ def debug_greedy_decoding_performance():
     cur_input_ids = torch.tensor([[output_ids[0]]], dtype=torch.int, device='cuda:0')
     input_pos = torch.tensor([int(input_ids.shape[1])], device=input_ids.device, dtype=torch.int)
 
-    while True:
-        # decode_one_dt_begin = datetime.now()
-        with torch.inference_mode():
-            # print('stride', cur_input_ids.stride())
-            logits = decode_one_token(model, input_pos, cur_input_ids).detach()
-            logits = logits[:, -1]
+    # while input_pos[0] < 1024:
+    while input_pos[0] < 1024:
+        logits = model_dispatch(
+            model=model,
+            func_2048=decode_one_token_2048,
+            func_4096=decode_one_token_4096,
+            input_pos=input_pos,
+            input_ids=cur_input_ids,
+        ).detach()
+        logits = logits[:, -1]
         output_id = torch.argmax(logits, dim=1)[0]
         output_ids.append(int(output_id))
-        # decode_one_dt_end = datetime.now()
-        # decode_one_dt_delta = decode_one_dt_end - decode_one_dt_begin
-        # print(
-        #     'decode input_pos =',
-        #     decode_one_dt_delta.total_seconds(),
-        #     input_pos,
-        #     cur_input_ids,
-        # )
         if output_ids[-1] == tokenizer.eos_token_id:
             break
         cur_input_ids[0] = output_id
