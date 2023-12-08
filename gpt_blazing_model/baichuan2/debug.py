@@ -85,11 +85,12 @@ def load_and_convert_to_model(model_folder: str = BAICHUAN2_13B_MODEL_FOLDER):
         model = Baichuan2Model(Baichuan2ModelConfig(debug=True))
         model.half()
 
-        if not model.config.use_original_attn_impl:
-            # For scaled_dot_product_attention.
-            torch.backends.cuda.enable_flash_sdp(False)
-            torch.backends.cuda.enable_mem_efficient_sdp(False)
-            torch.backends.cuda.enable_math_sdp(True)
+        # NOTE: this is not working.
+        # if not model.config.use_original_attn_impl:
+        #     # For scaled_dot_product_attention.
+        #     torch.backends.cuda.enable_flash_sdp(False)
+        #     torch.backends.cuda.enable_mem_efficient_sdp(False)
+        #     torch.backends.cuda.enable_math_sdp(True)
 
     baichuan_model = hf_model.model
 
@@ -298,12 +299,18 @@ def debug_greedy_decoding_performance():
         prefill = get_compiled_model_prefill()
         with torch.inference_mode():
             for _ in range(5):
-                print(
-                    'prefill compiling time:',
-                    timed(lambda: prefill(model, input_pos, input_ids))[1],
-                    input_pos,
-                    input_ids,
-                )
+                # https://github.com/pytorch-labs/gpt-fast/issues/31
+                with torch.backends.cuda.sdp_kernel(
+                    enable_flash=False,
+                    enable_mem_efficient=False,
+                    enable_math=True,
+                ):
+                    print(
+                        'prefill compiling time:',
+                        timed(lambda: prefill(model, input_pos, input_ids))[1],
+                        input_pos,
+                        input_ids,
+                    )
     else:
         prefill = model_prefill
 
@@ -312,16 +319,24 @@ def debug_greedy_decoding_performance():
     decode_one_token = get_compiled_model_decode_one_token()
     input_pos = torch.tensor([0], device=input_ids.device, dtype=torch.int)
     for _ in range(10):
-        cur_input_ids = torch.tensor([[random.randint(0, 125696)]],
-                                     dtype=torch.int,
-                                     device='cuda:0')
+        cur_input_ids = torch.tensor(
+            [[random.randint(0, 125696)]],
+            dtype=torch.int,
+            device='cuda:0',
+        )
         with torch.inference_mode():
-            print(
-                'decode_one_token compiling time:',
-                timed(lambda: decode_one_token(model, input_pos, cur_input_ids))[1],
-                input_pos,
-                cur_input_ids,
-            )
+            # https://github.com/pytorch-labs/gpt-fast/issues/31
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_mem_efficient=False,
+                enable_math=True,
+            ):
+                print(
+                    'decode_one_token compiling time:',
+                    timed(lambda: decode_one_token(model, input_pos, cur_input_ids))[1],
+                    input_pos,
+                    cur_input_ids,
+                )
             input_pos += 1
 
     print('Running...')

@@ -21,7 +21,8 @@ class Baichuan2ModelConfig:
     pad_token_id: int = 0
     rms_norm_eps: float = 1e-06
     vocab_size: int = 125696
-    use_original_attn_impl: bool = True
+    use_original_attn_impl: bool = False
+    apply_nan_to_num_to_alibi_mask: bool = False
     debug: bool = False
 
 
@@ -251,6 +252,7 @@ class Baichuan2Model(torch.nn.Module):
     def __init__(self, config: Baichuan2ModelConfig) -> None:
         super().__init__()
         self.config = config
+        self.apply_nan_to_num_to_alibi_mask = config.apply_nan_to_num_to_alibi_mask
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
         # [num_heads, model_max_length, model_max_length]
@@ -266,6 +268,18 @@ class Baichuan2Model(torch.nn.Module):
         self.norm = RMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
 
         self.lm_head = NormHead(config.hidden_size, config.vocab_size)
+
+    def half(self):
+        self = super().half()
+        if self.apply_nan_to_num_to_alibi_mask:
+            self.alibi_mask.nan_to_num_()
+        return self
+
+    def bfloat16(self):
+        self = super().bfloat16()
+        if self.apply_nan_to_num_to_alibi_mask:
+            self.alibi_mask.nan_to_num_()
+        return self
 
     def forward(
         self,
