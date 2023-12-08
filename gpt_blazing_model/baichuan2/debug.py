@@ -166,20 +166,25 @@ fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
         print('Quantizing...')
         model = quantize_int8(model)
 
-    if compile:
-        print('Compiling...')
-        model = torch.compile(model, mode="reduce-overhead", fullgraph=True)
-
     if not q8:
         move_model_to_devices(model, [('cuda:0', 0), ('cuda:1', 20)])  # type: ignore
     else:
         model = model.to('cuda:0')  # type: ignore
 
+    if compile:
+        print('Compiling...')
+        model = torch.compile(model, mode="reduce-overhead", fullgraph=True)
+
     input_ids = generate_debug_input_ids(model_folder)
     input_ids = input_ids.to('cuda:0')
     input_pos = torch.arange(0, input_ids.shape[1], device=input_ids.device)
     with torch.inference_mode():
-        logits = model(input_pos=input_pos, input_ids=input_ids)
+        with torch.backends.cuda.sdp_kernel(
+            enable_flash=False,
+            enable_mem_efficient=False,
+            enable_math=True,
+        ):
+            logits = model(input_pos=input_pos, input_ids=input_ids)
 
     print('Saving to', output_file)
     torch.save(logits, output_file)
@@ -229,7 +234,7 @@ def get_top_p_sorted_indices(logits: torch.Tensor, top_p: float = 0.9):
 
 def compare_logits(file0: str, file1: str):
     '''
-# 0.9965
+# 0.9955
 fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/hf_logits.pt"
@@ -239,7 +244,7 @@ fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt"
 
-# 0.9949
+# 0.9955
 fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/compiled_logits.pt"
@@ -248,6 +253,11 @@ fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
 fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/compiled_q8_logits.pt"
+
+# 0.9943
+fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
+    --file0="$GPT_BLAZING_DATA/model/baichuan2/compiled_q8_logits.pt" \
+    --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt"
     '''
     logits0 = torch.load(file0, map_location='cuda:0')
     logits1 = torch.load(file1, map_location='cuda:0')
@@ -258,6 +268,22 @@ fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     rank = tpsi0 == tpsi1
     r = rank.sum() / rank.numel()
     print(r)
+
+
+def demo_func(x: torch.Tensor, y: torch.Tensor, begin: int, end: int):
+    return x[:, begin:end] + y[:, begin:end]
+
+
+def debug_compile():
+    func = torch.compile(demo_func, mode="reduce-overhead", fullgraph=True)
+
+    x = torch.rand((1, 20, 128))
+    y = torch.rand((1, 20, 128))
+
+    print(func(x, y, 0, 10))
+    # triggers Recompiling!
+    print(func(x, y, 0, 15))
+    print(func(x, y, 1, 2))
 
 
 def timed(fn):  # type: ignore
