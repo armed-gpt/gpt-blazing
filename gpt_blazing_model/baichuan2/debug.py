@@ -39,6 +39,46 @@ def load_hf_model(
     )
 
 
+def eval_hf_model():
+    from transformers import AutoTokenizer
+    from transformers.generation.utils import GenerationConfig
+
+    with EmptyInitOnDevice():
+        model = load_hf_model()
+    model.generation_config = GenerationConfig.from_pretrained(BAICHUAN2_13B_MODEL_FOLDER)
+    tokenizer = AutoTokenizer.from_pretrained(
+        BAICHUAN2_13B_MODEL_FOLDER,
+        use_fast=False,
+        trust_remote_code=True,
+    )
+
+    model.generation_config.do_sample = False
+    # pip install bitsandbytes scipy
+    model = model.quantize(8).to('cuda:0')
+
+    print('Warmup')
+    with torch.inference_mode():
+        print(model.chat(tokenizer, [{"role": "user", "content": '你好'}]))
+
+    print('Running...')
+    decode_dt_begin = datetime.now()
+    with torch.inference_mode():
+        response = model.chat(
+            tokenizer,
+            [{
+                "role": "user",
+                "content": "帮我写一篇与A股主题相关的作文，800字左右"
+            }],
+        )
+    decode_dt_end = datetime.now()
+
+    decode_dt_delta = decode_dt_end - decode_dt_begin
+    print('decode_dt_delta:', decode_dt_delta)
+    output_ids = tokenizer.encode(response, add_special_tokens=False)
+    print('tok/s:', (len(output_ids) + 1) / decode_dt_delta.total_seconds())
+    print(response)
+
+
 def load_and_convert_to_model(model_folder: str = BAICHUAN2_13B_MODEL_FOLDER):
     with EmptyInitOnDevice():
         hf_model = load_hf_model(model_folder)
