@@ -104,8 +104,6 @@ def load_and_convert_to_model(model_folder: str = BAICHUAN2_13B_MODEL_FOLDER):
         layer.load_state_dict(baichuan_model.layers[layer_idx].state_dict())
     model.norm.load_state_dict(baichuan_model.norm.state_dict())
     model.lm_head.load_state_dict(hf_model.lm_head.state_dict())
-    with torch.inference_mode():
-        model.lm_head.weight.data = F.normalize(model.lm_head.weight)
     return model
 
 
@@ -189,7 +187,7 @@ fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
             enable_mem_efficient=False,
             enable_math=True,
         ):
-            logits = model(input_pos=input_pos, input_ids=input_ids)
+            logits = model(input_pos=input_pos, end=2048, input_ids=input_ids)
 
     print('Saving to', output_file)
     torch.save(logits, output_file)

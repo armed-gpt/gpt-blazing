@@ -21,7 +21,7 @@ class Baichuan2ModelConfig:
     pad_token_id: int = 0
     rms_norm_eps: float = 1e-06
     vocab_size: int = 125696
-    use_original_attn_impl: bool = False
+    use_original_attn_impl: bool = True
     apply_nan_to_num_to_alibi_mask: bool = False
     debug: bool = False
 
@@ -242,11 +242,7 @@ class NormHead(nn.Module):
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
 
     def forward(self, hidden_states: torch.Tensor):
-        if self.training:
-            norm_weight = nn.functional.normalize(self.weight)
-        else:
-            # NOTE: normalize the state dict.
-            norm_weight = self.weight
+        norm_weight = nn.functional.normalize(self.weight)
         return nn.functional.linear(hidden_states, norm_weight)
 
 
