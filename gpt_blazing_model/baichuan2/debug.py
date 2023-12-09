@@ -432,6 +432,60 @@ def debug_greedy_decoding_performance():
     print(''.join(texts))
 
 
+def debug_encoding_performance():
+    print('Loading...')
+    model = load_model(
+        model_pt=str(io.file("$GPT_BLAZING_DATA/model/baichuan2/13b-q8.pt", expandvars=True)),
+        q8=True,
+        config=Baichuan2ModelConfig(debug=False),
+    )
+    model.to('cuda:0')
+
+    print('Compiling...')
+    import torch._dynamo.config
+    import torch._inductor.config
+
+    torch._inductor.config.coordinate_descent_tuning = True
+    torch._inductor.config.triton.unique_kernel_names = True
+    torch._inductor.config.fx_graph_cache = True
+
+    input_ids = generate_debug_input_ids()
+    input_ids = input_ids.to('cuda:0')
+
+    static = True
+
+    if not static:
+        prefill_2048 = compile_model_prefill(model_prefill_2048)
+    else:
+        prefill_2048 = torch.compile(model_prefill_2048, mode="reduce-overhead", fullgraph=True)
+
+    input_ids = generate_debug_input_ids()
+    input_ids = input_ids.to('cuda:0')
+
+    if static:
+        static_input_ids = torch.tensor([[0] * 2048], dtype=torch.int, device=input_ids.device)
+        static_input_ids[0, :input_ids.shape[1]] = input_ids
+        input_ids = static_input_ids
+
+    input_pos = torch.arange(
+        0,
+        int(input_ids.shape[1]),
+        device=input_ids.device,
+        dtype=torch.int,
+    )
+
+    with torch.inference_mode():
+        for _ in range(5):
+            print(
+                'prefill compiling time:',
+                timed(lambda: prefill_2048(
+                    model=model,
+                    input_pos=input_pos,
+                    input_ids=input_ids,
+                ))[1],
+            )
+
+
 def export_model(
     output_file: str,
     model_folder: str = BAICHUAN2_13B_MODEL_FOLDER,
