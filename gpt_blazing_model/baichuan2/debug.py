@@ -21,6 +21,7 @@ from .model import (
     model_dispatch,
 )
 from .tokenizer import Baichuan2Tokenizer
+from .inference import Baichuan2InferenceConfig, Baichuan2Inference
 
 BAICHUAN2_13B_MODEL_FOLDER = str(
     io.folder(
@@ -237,7 +238,7 @@ def get_top_p_sorted_indices(logits: torch.Tensor, top_p: float = 0.9):
 
 def compare_logits(file0: str, file1: str):
     '''
-# 0.9955
+# 1.
 fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/hf_logits.pt"
@@ -247,7 +248,7 @@ fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt"
 
-# 0.9955
+# 0.9949
 fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/compiled_logits.pt"
@@ -486,6 +487,20 @@ def debug_encoding_performance():
             )
 
 
+def debug_inference():
+    import os
+    os.environ['TORCH_LOGS'] = 'recompiles'
+    inference = Baichuan2Inference(
+        Baichuan2InferenceConfig(
+            model_folder=str(
+                io.folder('$GPT_BLAZING_DATA/model/baichuan2-13b-chat/', expandvars=True)
+            ),
+            device='cuda:0',
+        )
+    )
+    print(inference)
+
+
 def export_model(
     output_file: str,
     model_folder: str = BAICHUAN2_13B_MODEL_FOLDER,
@@ -493,7 +508,7 @@ def export_model(
 ):
     '''
 fib gpt_blazing_model/baichuan2/debug.py:export_model \
-    --output_file="$GPT_BLAZING_DATA/model/baichuan2/13b-q8.pt" \
+    --output_file="$GPT_BLAZING_DATA/model/baichuan2-13b-chat/q8.pt" \
     --q8
     '''
     model = load_and_convert_to_model(model_folder)
