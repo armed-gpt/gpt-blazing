@@ -429,11 +429,8 @@ def debug_greedy_decoding_performance():
     print('encode_decode_dt_delta:', encode_decode_dt_delta.total_seconds())
     print('tok/s:', len(output_ids) / encode_decode_dt_delta.total_seconds())
 
-    texts = []
-    for token in output_ids[:-1]:
-        texts.append(tokenizer.decode(token))
     print('Generation:')
-    print(''.join(texts))
+    print(tokenizer.decode(output_ids[:-1]))
 
 
 def debug_encoding_performance():
@@ -646,14 +643,14 @@ suffix:
 
     print('w/o cache.')
     for idx, system in enumerate(systems):
-        _, t = timed(lambda: inference.prefill([(Role.SYSTEM, system), (Role.USER, 'hello')]))
+        _, t = timed(lambda: inference.model_prefill([(Role.SYSTEM, system), (Role.USER, 'hello')]))
         print(idx, t)
 
     print('w cache.')
     for _ in range(3):
         for idx, system in enumerate(systems[:3]):
             _, t = timed(
-                lambda: inference.prefill(
+                lambda: inference.model_prefill(
                     [(Role.SYSTEM, system), (Role.USER, 'hello')],
                     cache_system=True,
                 )
@@ -662,35 +659,35 @@ suffix:
 
     print('lru.')
     _, t = timed(
-        lambda: inference.prefill(
+        lambda: inference.model_prefill(
             [(Role.SYSTEM, systems[3]), (Role.USER, 'hello')],
             cache_system=True,
         )
     )
     print('3', t)
     _, t = timed(
-        lambda: inference.prefill(
+        lambda: inference.model_prefill(
             [(Role.SYSTEM, systems[3]), (Role.USER, 'hello')],
             cache_system=True,
         )
     )
     print('3 again', t)
     _, t = timed(
-        lambda: inference.prefill(
+        lambda: inference.model_prefill(
             [(Role.SYSTEM, systems[0]), (Role.USER, 'hello')],
             cache_system=True,
         )
     )
     print('0', t)
     _, t = timed(
-        lambda: inference.prefill(
+        lambda: inference.model_prefill(
             [(Role.SYSTEM, systems[0]), (Role.USER, 'hello')],
             cache_system=True,
         )
     )
     print('0 again', t)
     _, t = timed(
-        lambda: inference.prefill(
+        lambda: inference.model_prefill(
             [(Role.SYSTEM, systems[2]), (Role.USER, 'hello')],
             cache_system=True,
         )

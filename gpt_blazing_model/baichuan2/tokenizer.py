@@ -45,5 +45,5 @@ class Baichuan2Tokenizer:
 
         return input_ids, system, num_system_tokens
 
-    def decode(self, token: int) -> str:
-        return self.sp_model.decode(token)  # type: ignore
+    def decode(self, tokens: Sequence[int]) -> str:
+        return self.sp_model.decode(tokens)  # type: ignore

@@ -199,7 +199,7 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
     def get_eos_token(self):
         return self.tokenizer.eos_token_id
 
-    def prefill(self, rounds: Sequence[Tuple[Role, str]], cache_system: bool = False):
+    def model_prefill(self, rounds: Sequence[Tuple[Role, str]], cache_system: bool = False):
         input_ids = None
         system = None
         num_system_tokens = 0
@@ -258,7 +258,7 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
 
         return logits, end
 
-    def decode_one_token(self, input_pos: torch.Tensor, input_ids: torch.Tensor):
+    def model_decode_one_token(self, input_pos: torch.Tensor, input_ids: torch.Tensor):
         logits = model_dispatch(
             model=self.model,
             func_2048=self.decode_one_token_2048,
@@ -267,3 +267,6 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
             input_ids=input_ids,
         )
         return logits
+
+    def tokenizer_decode(self, tokens: Sequence[int]):
+        return self.tokenizer.decode(tokens)

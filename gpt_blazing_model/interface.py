@@ -38,12 +38,19 @@ class Inference(Generic[_T_CONFIG]):
     def get_eos_token(self):
         raise NotImplementedError()
 
-    def prefill(
+    def model_prefill(
         self,
         rounds: Sequence[Tuple[Role, str]],
         cache_system: bool = False,
-    ):
+    ) -> Tuple[torch.Tensor, int]:
         raise NotImplementedError()
 
-    def decode_one_token(self, input_pos: torch.Tensor, input_ids: torch.Tensor):
+    def model_decode_one_token(
+        self,
+        input_pos: torch.Tensor,
+        input_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        raise NotImplementedError()
+
+    def tokenizer_decode(self, tokens: Sequence[int]) -> str:
         raise NotImplementedError()
