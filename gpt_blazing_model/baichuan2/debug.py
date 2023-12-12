@@ -391,7 +391,7 @@ def debug_greedy_decoding_performance():
         func_4096=prefill_4096,
         input_pos=input_pos,
         input_ids=input_ids,
-    ).detach()
+    )
     logits = logits[:, -1]
     output_id = int(torch.argmax(logits, dim=1)[0])
     output_ids.append(output_id)
@@ -412,7 +412,7 @@ def debug_greedy_decoding_performance():
             func_4096=decode_one_token_4096,
             input_pos=input_pos,
             input_ids=cur_input_ids,
-        ).detach()
+        )
         logits = logits[:, -1]
         output_id = torch.argmax(logits, dim=1)[0]
         output_ids.append(int(output_id))

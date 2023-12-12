@@ -203,7 +203,7 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
         input_ids = None
         system = None
         num_system_tokens = 0
-        offset = 0
+        begin = 0
         initialized = False
 
         if cache_system:
@@ -226,7 +226,7 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
                     # BOS only.
                     assert _num_system_tokens == 1
                     input_ids = input_ids[1:]
-                    offset = num_system_tokens
+                    begin = num_system_tokens
 
                     initialized = True
 
@@ -235,21 +235,12 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
             # Invalidate the model cache.
             self.cached_system = None
 
-        if not input_ids:
-            return
+        assert input_ids
 
-        input_pos = torch.arange(
-            offset,
-            offset + len(input_ids),
-            device=self.config.device,
-            dtype=torch.int,
-        )
-        input_ids = torch.tensor(
-            [input_ids],
-            dtype=torch.int,
-            device=self.config.device,
-        )
-        model_dispatch(
+        end = begin + len(input_ids)
+        input_pos = torch.arange(begin, end, device=self.config.device, dtype=torch.int)
+        input_ids = torch.tensor([input_ids], dtype=torch.int, device=self.config.device)
+        logits = model_dispatch(
             model=self.model,
             func_2048=self.prefill_2048,
             func_4096=self.prefill_4096,
@@ -264,3 +255,15 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
                 system,
                 (num_system_tokens, model_get_cache(self.model, num_system_tokens)),
             )
+
+        return logits, end
+
+    def decode_one_token(self, input_pos: torch.Tensor, input_ids: torch.Tensor):
+        logits = model_dispatch(
+            model=self.model,
+            func_2048=self.decode_one_token_2048,
+            func_4096=self.decode_one_token_4096,
+            input_pos=input_pos,
+            input_ids=input_ids,
+        )
+        return logits

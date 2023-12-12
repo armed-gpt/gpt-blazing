@@ -495,7 +495,7 @@ def model_dispatch(
             enable_mem_efficient=False,
             enable_math=True,
         ):
-            return func(model, input_pos, input_ids)
+            return func(model, input_pos, input_ids).detach()
 
 
 def model_get_cache(

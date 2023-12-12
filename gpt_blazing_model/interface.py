@@ -1,6 +1,8 @@
 from typing import TypeVar, Generic, Optional, Callable, Any, Sequence, Tuple
 from enum import unique, Enum
 
+import torch
+
 
 @unique
 class QuantizationMode(Enum):
@@ -41,4 +43,7 @@ class Inference(Generic[_T_CONFIG]):
         rounds: Sequence[Tuple[Role, str]],
         cache_system: bool = False,
     ):
+        raise NotImplementedError()
+
+    def decode_one_token(self, input_pos: torch.Tensor, input_ids: torch.Tensor):
         raise NotImplementedError()
