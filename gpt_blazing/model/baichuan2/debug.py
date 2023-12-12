@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import sentencepiece as spm
 import iolite as io
 
-from gpt_blazing_model.interface import Role
+from gpt_blazing.model.interface import Role
 from .model import (
     Baichuan2Model,
     Baichuan2ModelConfig,
@@ -24,7 +24,7 @@ from .model import (
     model_set_cache,
 )
 from .tokenizer import Baichuan2Tokenizer
-from .inference import Baichuan2InferenceConfig, Baichuan2Inference
+from .inference import Baichuan2ModelInferenceConfig, Baichuan2ModelInference
 
 BAICHUAN2_13B_MODEL_FOLDER = str(
     io.folder(
@@ -490,8 +490,8 @@ def debug_encoding_performance():
 def debug_inference_cache_0():
     import os
     os.environ['TORCH_LOGS'] = 'recompiles'
-    inference = Baichuan2Inference(
-        Baichuan2InferenceConfig(
+    inference = Baichuan2ModelInference(
+        Baichuan2ModelInferenceConfig(
             model_folder=str(
                 io.folder('$GPT_BLAZING_DATA/model/baichuan2-13b-chat/', expandvars=True)
             ),
@@ -609,8 +609,8 @@ compared to prefill...
 def debug_inference_cache_1():
     import os
     os.environ['TORCH_LOGS'] = 'recompiles'
-    inference = Baichuan2Inference(
-        Baichuan2InferenceConfig(
+    inference = Baichuan2ModelInference(
+        Baichuan2ModelInferenceConfig(
             model_folder=str(
                 io.folder('$GPT_BLAZING_DATA/model/baichuan2-13b-chat/', expandvars=True)
             ),

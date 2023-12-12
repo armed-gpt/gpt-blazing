@@ -25,7 +25,7 @@ _TEXT_TO_ROLE = {role.value: role for role in Role}
 _T_CONFIG = TypeVar('_T_CONFIG')
 
 
-class Inference(Generic[_T_CONFIG]):
+class ModelInference(Generic[_T_CONFIG]):
 
     def __init__(
         self,

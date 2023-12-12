@@ -2,7 +2,7 @@ from typing import Sequence, Tuple
 
 from sentencepiece import SentencePieceProcessor
 
-from gpt_blazing_model.interface import Role
+from gpt_blazing.model.interface import Role
 
 
 class Baichuan2Tokenizer:

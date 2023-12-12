@@ -6,7 +6,7 @@ import torch
 import attrs
 import iolite as io
 
-from gpt_blazing_model.interface import Inference, QuantizationMode, Role
+from gpt_blazing.model.interface import ModelInference, QuantizationMode, Role
 from .model import (
     load_model,
     model_prefill_2048,
@@ -91,7 +91,7 @@ class LruCache:
 
 
 @attrs.define
-class Baichuan2InferenceConfig:
+class Baichuan2ModelInferenceConfig:
     model_folder: str
     model_config: Baichuan2ModelConfig = attrs.field(factory=Baichuan2ModelConfig)
     quantization_mode: QuantizationMode = QuantizationMode.Q8
@@ -99,11 +99,11 @@ class Baichuan2InferenceConfig:
     cache_capacity: int = 20
 
 
-class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
+class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
 
     def __init__(
         self,
-        config: Baichuan2InferenceConfig,
+        config: Baichuan2ModelInferenceConfig,
         func_process_model: Optional[Callable[[Any], None]] = None,
     ):
         super().__init__(config, func_process_model)
