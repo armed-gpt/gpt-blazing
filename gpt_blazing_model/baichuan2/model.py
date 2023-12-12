@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, Sequence, List
 import math
 
 import attrs
@@ -496,3 +496,36 @@ def model_dispatch(
             enable_math=True,
         ):
             return func(model, input_pos, input_ids)
+
+
+def model_get_cache(
+    model: Baichuan2Model,
+    length: int,
+    device: Optional[str] = None,
+):
+    attn_cache: List[Tuple[torch.Tensor, torch.Tensor]] = []
+    for layer in model.layers:
+        k_cache = layer.self_attn.k_cache[:, :, :length].clone()
+        v_cache = layer.self_attn.v_cache[:, :, :length].clone()
+        if device:
+            k_cache = k_cache.to(device, non_blocking=True)
+            v_cache = v_cache.to(device, non_blocking=True)
+        attn_cache.append((k_cache, v_cache))
+    return attn_cache
+
+
+def model_set_cache(
+    model: Baichuan2Model,
+    length: int,
+    attn_cache: Sequence[Tuple[torch.Tensor, torch.Tensor]],
+):
+    assert len(model.layers) == len(attn_cache)
+    for layer, (k_cache, v_cache) in zip(model.layers, attn_cache):
+        layer.self_attn.k_cache[:, :, :length] = k_cache.to(
+            layer.self_attn.k_cache.device,
+            non_blocking=True,
+        )
+        layer.self_attn.v_cache[:, :, :length] = v_cache.to(
+            layer.self_attn.v_cache.device,
+            non_blocking=True,
+        )

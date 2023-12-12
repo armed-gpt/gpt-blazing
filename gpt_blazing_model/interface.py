@@ -1,4 +1,4 @@
-from typing import TypeVar, Generic, Optional, Callable, Any
+from typing import TypeVar, Generic, Optional, Callable, Any, Sequence, Tuple
 from enum import unique, Enum
 
 
@@ -6,6 +6,19 @@ from enum import unique, Enum
 class QuantizationMode(Enum):
     Q8 = 'q8'
 
+
+@unique
+class Role(Enum):
+    SYSTEM = 'system'
+    USER = 'user'
+    ASSISTANT = 'assistant'
+
+    @classmethod
+    def from_string(cls, text: str):
+        return _TEXT_TO_ROLE[text]
+
+
+_TEXT_TO_ROLE = {role.value: role for role in Role}
 
 _T_CONFIG = TypeVar('_T_CONFIG')
 
@@ -19,3 +32,13 @@ class Inference(Generic[_T_CONFIG]):
     ):
         self.config = config
         self.func_process_model = func_process_model
+
+    def get_eos_token(self):
+        raise NotImplementedError()
+
+    def prefill(
+        self,
+        rounds: Sequence[Tuple[Role, str]],
+        cache_system: bool = False,
+    ):
+        raise NotImplementedError()

@@ -1,4 +1,4 @@
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Sequence, Tuple
 import logging
 import random
 
@@ -6,7 +6,7 @@ import torch
 import attrs
 import iolite as io
 
-from gpt_blazing_model.interface import Inference, QuantizationMode
+from gpt_blazing_model.interface import Inference, QuantizationMode, Role
 from .model import (
     load_model,
     model_prefill_2048,
@@ -16,6 +16,8 @@ from .model import (
     model_decode_one_token_4096,
     compile_model_decode_one_token,
     model_dispatch,
+    model_get_cache,
+    model_set_cache,
     Baichuan2ModelConfig,
 )
 from .tokenizer import Baichuan2Tokenizer
@@ -33,12 +35,68 @@ def timed(fn):  # type: ignore
     return result, start.elapsed_time(end) / 1000
 
 
+LRU_CACHE_PREV, LRU_CACHE_NEXT, LRU_CACHE_KEY, LRU_CACHE_VALUE = 0, 1, 2, 3
+
+
+class LruCache:
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+
+        root = []
+        root[:] = [root, root, None, None]
+        self.root = root
+
+        self.cache = {}
+
+    def get(self, key: str):
+        link = self.cache.get(key)
+        if link is None:
+            return None
+
+        # Move link to tail.
+        link_prev, link_next, _key, value = link
+        assert key == _key
+
+        link_prev[LRU_CACHE_NEXT] = link_next
+        link_next[LRU_CACHE_PREV] = link_prev
+
+        last = self.root[LRU_CACHE_PREV]
+        last[LRU_CACHE_NEXT] = self.root[LRU_CACHE_PREV] = link
+        link[LRU_CACHE_PREV] = last
+        link[LRU_CACHE_NEXT] = self.root
+
+        return value
+
+    def set(self, key: str, value: Any):
+        assert key not in self.cache
+        if len(self.cache) >= self.capacity:
+            # Use the old root to store the new key and result.
+            old_root = self.root
+            old_root[LRU_CACHE_KEY] = key
+            old_root[LRU_CACHE_VALUE] = value
+
+            self.root = old_root[LRU_CACHE_NEXT]
+            old_key = self.root[LRU_CACHE_KEY]
+            self.root[LRU_CACHE_KEY] = self.root[LRU_CACHE_VALUE] = None
+
+            del self.cache[old_key]
+            self.cache[key] = old_root
+
+        else:
+            # Add a new node.
+            last = self.root[LRU_CACHE_PREV]
+            link = [last, self.root, key, value]
+            last[LRU_CACHE_NEXT] = self.root[LRU_CACHE_PREV] = self.cache[key] = link
+
+
 @attrs.define
 class Baichuan2InferenceConfig:
     model_folder: str
     model_config: Baichuan2ModelConfig = attrs.field(factory=Baichuan2ModelConfig)
     quantization_mode: QuantizationMode = QuantizationMode.Q8
     device: Optional[str] = None
+    cache_capacity: int = 20
 
 
 class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
@@ -79,6 +137,10 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
         self.decode_one_token_2048 = compile_model_decode_one_token(model_decode_one_token_2048)
         self.decode_one_token_4096 = compile_model_decode_one_token(model_decode_one_token_4096)
         self.trigger_model_compilation()
+
+        # For cache.
+        self.cached_system: Optional[str] = None
+        self.lru_cache = LruCache(config.cache_capacity)
 
     def trigger_model_compilation(self):
         import torch._dynamo.config
@@ -133,3 +195,72 @@ class Baichuan2Inference(Inference[Baichuan2InferenceConfig]):
                     )
                 )
                 logger.info(f'[{idx}]: decode_one_token compilation: {num_seconds}s.')
+
+    def get_eos_token(self):
+        return self.tokenizer.eos_token_id
+
+    def prefill(self, rounds: Sequence[Tuple[Role, str]], cache_system: bool = False):
+        input_ids = None
+        system = None
+        num_system_tokens = 0
+        offset = 0
+        initialized = False
+
+        if cache_system:
+            system = None
+            if rounds[0][0] == Role.SYSTEM:
+                system = rounds[0][1]
+
+            if system:
+                cache = self.lru_cache.get(system)
+                if cache is not None:
+                    num_system_tokens, attn_cache = cache
+                    # Cache hit.
+                    if system != self.cached_system:
+                        # Need to move the cache to model.
+                        model_set_cache(self.model, num_system_tokens, attn_cache)
+                        self.cached_system = system
+
+                    # Skip tokenizing system.
+                    input_ids, _, _num_system_tokens = self.tokenizer.chat_tokenize(rounds[1:])
+                    # BOS only.
+                    assert _num_system_tokens == 1
+                    input_ids = input_ids[1:]
+                    offset = num_system_tokens
+
+                    initialized = True
+
+        if not initialized:
+            input_ids, system, num_system_tokens = self.tokenizer.chat_tokenize(rounds)
+            # Invalidate the model cache.
+            self.cached_system = None
+
+        if not input_ids:
+            return
+
+        input_pos = torch.arange(
+            offset,
+            offset + len(input_ids),
+            device=self.config.device,
+            dtype=torch.int,
+        )
+        input_ids = torch.tensor(
+            [input_ids],
+            dtype=torch.int,
+            device=self.config.device,
+        )
+        model_dispatch(
+            model=self.model,
+            func_2048=self.prefill_2048,
+            func_4096=self.prefill_4096,
+            input_pos=input_pos,
+            input_ids=input_ids,
+        )
+
+        if cache_system and system and self.cached_system is None:
+            # Add to cache.
+            self.cached_system = system
+            self.lru_cache.set(
+                system,
+                (num_system_tokens, model_get_cache(self.model, num_system_tokens)),
+            )
