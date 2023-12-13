@@ -1,8 +1,6 @@
 # gpt-blazing
 
-This is a project inspired by [gpt-fast](https://github.com/pytorch-labs/gpt-fast).
-The same performance optimization strategy is applied to *MORE* models.
-Different from gpt-fast, this project *IS* intended to be a "framework" or "library".
+This project draws inspiration from [gpt-fast](https://github.com/pytorch-labs/gpt-fast) and applies the same performance optimization strategy to MORE models. Unlike gpt-fast, this project aims to be a “framework” or “library”.
 
 ## Installation
 
