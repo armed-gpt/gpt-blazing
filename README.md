@@ -1,5 +1,9 @@
 # gpt-blazing
 
+This is a project inspired by [gpt-fast](https://github.com/pytorch-labs/gpt-fast).
+The same performance optimization strategy is applied to *MORE* models.
+Different from gpt-fast, this project *IS* intended to be a "framework" or "library".
+
 ## Installation
 
 ```bash
@@ -9,12 +13,12 @@ pip install --pre gpt-blazing
 
 ## Usage
 
-### Download a supported model.
+### Download a **gpt-blazing** converted model.
 
-Supported models:
-
-- 🤗 [baichuan2-13b-chat](https://huggingface.co/gpt-blazing/baichuan2-13b-chat)
-- more to be supported...
+| Original model | 👇👇 **gpt-blazing** converted model |
+|:-----:|:---------------:|
+| 🤗 [baichuan-inc/Baichuan2-13B-Chat](https://huggingface.co/baichuan-inc/Baichuan2-13B-Chat)| 🤗 [gpt-blazing/baichuan2-13b-chat](https://huggingface.co/gpt-blazing/baichuan2-13b-chat)|
+| more to be supported | ... |
 
 ### Run the following demo.
 
