@@ -7,7 +7,7 @@ import sentencepiece as spm
 import iolite as io
 
 from gpt_blazing.model.interface import Role
-from .model import (
+from gpt_blazing.model.baichuan2.model import (
     Baichuan2Model,
     Baichuan2ModelConfig,
     quantize_int8,
@@ -23,8 +23,11 @@ from .model import (
     model_get_cache,
     model_set_cache,
 )
-from .tokenizer import Baichuan2Tokenizer
-from .inference import Baichuan2ModelInferenceConfig, Baichuan2ModelInference
+from gpt_blazing.model.baichuan2.tokenizer import Baichuan2Tokenizer
+from gpt_blazing.model.baichuan2.inference import (
+    Baichuan2ModelInferenceConfig,
+    Baichuan2ModelInference,
+)
 
 BAICHUAN2_13B_MODEL_FOLDER = str(
     io.folder(

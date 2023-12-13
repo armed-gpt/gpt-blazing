@@ -28,8 +28,7 @@ def debug_engine():
     generate_dt_begin = datetime.now()
     response = engine.generate([(Role.USER, "帮我写一篇与A股主题相关的作文，800字左右")])
     generate_dt_end = datetime.now()
-    print('generate:', (generate_dt_end - generate_dt_begin).total_seconds())
+    generate_total_seconds = (generate_dt_end - generate_dt_begin).total_seconds()
+    print('generate:', generate_total_seconds, response.num_tokens / generate_total_seconds)
 
-    print(response)
-
-    breakpoint()
+    print(response.content)

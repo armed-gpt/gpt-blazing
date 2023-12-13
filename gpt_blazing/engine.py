@@ -16,6 +16,12 @@ class GenerationConfig:
 _default_generation_config = GenerationConfig()
 
 
+@attrs.define
+class Response:
+    content: str
+    num_tokens: int
+
+
 class Engine:
 
     def __init__(self, model_inference: ModelInference):
@@ -50,7 +56,10 @@ class Engine:
             )
             input_pos += 1
 
-        return self.model_inference.tokenizer_decode(sampled_ids)
+        return Response(
+            content=self.model_inference.tokenizer_decode(sampled_ids),
+            num_tokens=len(sampled_ids),
+        )
 
     def generate(
         self,
