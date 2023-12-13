@@ -23,6 +23,7 @@ from gpt_blazing.model.baichuan2.model import (
     model_get_cache,
     model_set_cache,
 )
+from gpt_blazing.model.baichuan2.utility import convert_hf_model_to_model
 from gpt_blazing.model.baichuan2.tokenizer import Baichuan2Tokenizer
 from gpt_blazing.model.baichuan2.inference import (
     Baichuan2ModelInferenceConfig,
@@ -94,24 +95,7 @@ def eval_hf_model():
 def load_and_convert_to_model(model_folder: str = BAICHUAN2_13B_MODEL_FOLDER):
     with EmptyInitOnDevice():
         hf_model = load_hf_model(model_folder)
-        model = Baichuan2Model(Baichuan2ModelConfig(debug=True))
-        model.half()
-
-        # NOTE: this is not working.
-        # if not model.config.use_original_attn_impl:
-        #     # For scaled_dot_product_attention.
-        #     torch.backends.cuda.enable_flash_sdp(False)
-        #     torch.backends.cuda.enable_mem_efficient_sdp(False)
-        #     torch.backends.cuda.enable_math_sdp(True)
-
-    baichuan_model = hf_model.model
-
-    model.embed_tokens.load_state_dict(baichuan_model.embed_tokens.state_dict())
-    for layer_idx, layer in enumerate(model.layers):
-        layer.load_state_dict(baichuan_model.layers[layer_idx].state_dict())
-    model.norm.load_state_dict(baichuan_model.norm.state_dict())
-    model.lm_head.load_state_dict(hf_model.lm_head.state_dict())
-    return model
+        return convert_hf_model_to_model(hf_model)
 
 
 def generate_debug_input_ids(model_folder: str = BAICHUAN2_13B_MODEL_FOLDER):
