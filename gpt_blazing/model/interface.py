@@ -35,7 +35,7 @@ class ModelInference(Generic[_T_CONFIG]):
         self.config = config
         self.func_process_model = func_process_model
 
-    def get_eos_token(self):
+    def get_eos_token(self) -> int:
         raise NotImplementedError()
 
     def model_prefill(

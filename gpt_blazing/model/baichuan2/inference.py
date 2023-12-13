@@ -95,7 +95,7 @@ class Baichuan2ModelInferenceConfig:
     model_folder: str
     model_config: Baichuan2ModelConfig = attrs.field(factory=Baichuan2ModelConfig)
     quantization_mode: QuantizationMode = QuantizationMode.Q8
-    device: Optional[str] = None
+    device: str = 'cuda:0'
     cache_capacity: int = 20
 
 
