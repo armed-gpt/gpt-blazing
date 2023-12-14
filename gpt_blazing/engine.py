@@ -26,7 +26,7 @@ class Engine:
 
     def __init__(self, model_inference: ModelInference):
         self.model_inference = model_inference
-        self.eos_token = model_inference.get_eos_token()
+        self.eos_token = None
 
     def greedy_decode(
         self,
@@ -66,6 +66,9 @@ class Engine:
         rounds: Sequence[Tuple[Role, str]],
         generation_config: Optional[GenerationConfig] = None,
     ):
+        if self.eos_token is None:
+            self.eos_token = self.model_inference.get_eos_token()
+
         if generation_config is None:
             generation_config = _default_generation_config
 

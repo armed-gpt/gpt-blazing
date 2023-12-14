@@ -38,6 +38,7 @@ class Baichuan2Tokenizer:
                 input_ids.append(self.assistant_token_id)
             else:
                 raise NotImplementedError()
+            input_ids.append(self.bos_token_id)
             input_ids.extend(self.tokenize(text))
 
         assert rounds[-1][0] == Role.USER
