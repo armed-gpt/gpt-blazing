@@ -35,6 +35,15 @@ class ModelInference(Generic[_T_CONFIG]):
         self.config = config
         self.func_process_model = func_process_model
 
+    def load_model(self, device: Optional[str] = None) -> None:
+        raise NotImplementedError()
+
+    def compile_model(self) -> None:
+        raise NotImplementedError()
+
+    def model_is_ready(self) -> bool:
+        raise NotImplementedError()
+
     def get_eos_token(self) -> int:
         raise NotImplementedError()
 
