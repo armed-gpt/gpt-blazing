@@ -18,6 +18,8 @@ _default_generation_config = GenerationConfig()
 
 @attrs.define
 class Response:
+    succeeded: bool
+    error_message: str
     content: str
     prompt_tokens: int
     completion_tokens: int
@@ -65,6 +67,8 @@ class Engine:
             input_pos += 1
 
         return Response(
+            succeeded=True,
+            error_message='',
             content=self.model_inference.tokenizer_decode(sampled_ids),
             prompt_tokens=prompt_tokens,
             completion_tokens=len(sampled_ids),
@@ -83,7 +87,14 @@ class Engine:
             cache_system=generation_config.cache_system,
         )
         if model_prefill_result is None:
-            raise RuntimeError('Prompt too long!')
+            return Response(
+                succeeded=False,
+                error_message='Failed to prefill model (prompt too long).',
+                content='',
+                prompt_tokens=-1,
+                completion_tokens=-1,
+            )
+
         logits, prompt_tokens = model_prefill_result
 
         if not generation_config.do_sample:
