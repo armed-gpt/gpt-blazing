@@ -97,6 +97,7 @@ class Baichuan2ModelInferenceConfig:
     quantization_mode: QuantizationMode = QuantizationMode.Q8
     device: str = 'cuda:0'
     cache_capacity: int = 20
+    use_dynamic_dispatch: bool = True
 
 
 class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
@@ -109,6 +110,7 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
         super().__init__(config, func_process_model)
 
         self.device = config.device
+        self.model_max_length = 4096
 
         # For cache.
         self.cached_system: Optional[str] = None
@@ -153,10 +155,18 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
         assert self.model_is_loaded
 
         logger.info('Compiling model...')
-        self.prefill_2048 = compile_model_prefill(model_prefill_2048)
+
         self.prefill_4096 = compile_model_prefill(model_prefill_4096)
-        self.decode_one_token_2048 = compile_model_decode_one_token(model_decode_one_token_2048)
         self.decode_one_token_4096 = compile_model_decode_one_token(model_decode_one_token_4096)
+
+        self.prefill_2048 = None
+        self.decode_one_token_2048 = None
+
+        if self.config.use_dynamic_dispatch:
+            # NOTE: I'm not sure if this setting is buggy, will need more time to investigate.
+            self.prefill_2048 = compile_model_prefill(model_prefill_2048)
+            self.decode_one_token_2048 = compile_model_decode_one_token(model_decode_one_token_2048)
+
         self.trigger_model_compilation()
 
         self.model_is_compiled = True
@@ -221,6 +231,9 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
     def get_eos_token(self):
         return self.tokenizer.eos_token_id
 
+    def get_model_max_length(self):
+        return self.model_max_length
+
     def model_prefill(self, rounds: Sequence[Tuple[Role, str]], cache_system: bool = False):
         input_ids = None
         system = None
@@ -245,9 +258,7 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
 
                     # Skip tokenizing system.
                     input_ids, _, _num_system_tokens = self.tokenizer.chat_tokenize(rounds[1:])
-                    # BOS only.
-                    assert _num_system_tokens == 1
-                    input_ids = input_ids[1:]
+                    assert _num_system_tokens == 0
                     begin = num_system_tokens
 
                     initialized = True
@@ -260,6 +271,9 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
         assert input_ids
 
         end = begin + len(input_ids)
+        if end >= self.model_max_length:
+            return None
+
         input_pos = torch.arange(begin, end, device=self.device, dtype=torch.int)
         input_ids = torch.tensor([input_ids], dtype=torch.int, device=self.device)
         logits = model_dispatch(

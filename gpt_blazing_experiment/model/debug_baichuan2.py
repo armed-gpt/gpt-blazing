@@ -92,6 +92,162 @@ def eval_hf_model():
     print(response)
 
 
+def run_hf_demo():
+    from transformers import AutoTokenizer
+    from transformers.generation.utils import GenerationConfig
+
+    with EmptyInitOnDevice():
+        model = load_hf_model()
+    model.generation_config = GenerationConfig.from_pretrained(BAICHUAN2_13B_MODEL_FOLDER)
+    tokenizer = AutoTokenizer.from_pretrained(
+        BAICHUAN2_13B_MODEL_FOLDER,
+        use_fast=False,
+        trust_remote_code=True,
+    )
+
+    model.generation_config.do_sample = False
+    # pip install bitsandbytes scipy
+    model = model.quantize(8).to('cuda:0')
+
+    messages = []
+
+    while True:
+        content = input('[USER]: ').strip()
+        if content == 'reset':
+            messages = []
+            continue
+        messages.append({'role': 'user', 'content': content})
+        response = model.chat(tokenizer, messages)
+        print(f'[ASSISTANT]: {response}')
+        messages.append({'role': 'assistant', 'content': response})
+
+
+def build_chat_input_for_test(
+    generation_config,  # type: ignore
+    tokenizer,  # type: ignore
+    messages: Sequence[dict],
+    max_new_tokens: int = 0
+):
+
+    def _parse_messages(messages, split_role="user"):  # type: ignore
+        system, rounds = "", []
+        round = []
+        for i, message in enumerate(messages):
+            if message["role"] == "system":
+                assert i == 0
+                system = message["content"]
+                continue
+            if message["role"] == split_role and round:
+                rounds.append(round)
+                round = []
+            round.append(message)
+        if round:
+            rounds.append(round)
+        return system, rounds
+
+    max_new_tokens = max_new_tokens or generation_config.max_new_tokens
+    max_input_tokens = 4096 - max_new_tokens
+    system, rounds = _parse_messages(messages, split_role="user")
+    system_tokens = tokenizer.encode(system)
+    max_history_tokens = max_input_tokens - len(system_tokens)
+
+    history_tokens = []
+    for round in rounds[::-1]:
+        round_tokens = []
+        for message in round:
+            if message["role"] == "user":
+                round_tokens.append(generation_config.user_token_id)
+            else:
+                round_tokens.append(generation_config.assistant_token_id)
+            round_tokens.extend(tokenizer.encode(message["content"]))
+        if len(history_tokens
+               ) == 0 or len(history_tokens) + len(round_tokens) <= max_history_tokens:
+            history_tokens = round_tokens + history_tokens  # concat left
+            if len(history_tokens) < max_history_tokens:
+                continue
+        break
+
+    input_tokens = system_tokens + history_tokens
+    if messages[-1]["role"] != "assistant":
+        input_tokens.append(generation_config.assistant_token_id)
+    input_tokens = input_tokens[-max_input_tokens:]  # truncate left
+    return input_tokens
+
+
+def compare_tokenizers():
+    from transformers import AutoTokenizer
+    from transformers.generation.utils import GenerationConfig
+
+    hf_tokenizer = AutoTokenizer.from_pretrained(
+        BAICHUAN2_13B_MODEL_FOLDER,
+        use_fast=False,
+        trust_remote_code=True,
+    )
+    hf_generation_config = GenerationConfig.from_pretrained(BAICHUAN2_13B_MODEL_FOLDER)
+
+    tokenizer = Baichuan2Tokenizer(f'{BAICHUAN2_13B_MODEL_FOLDER}/tokenizer.model')
+
+    def _compare(messages):  # type: ignore
+        hf_input_ids = build_chat_input_for_test(
+            generation_config=hf_generation_config,
+            tokenizer=hf_tokenizer,
+            messages=messages,
+        )
+        input_ids = tokenizer.chat_tokenize([
+            (Role.from_string(message['role']), message['content']) for message in messages
+        ])[0]
+        assert hf_input_ids == input_ids
+
+    _compare([
+        {
+            'role': 'user',
+            'content': '测试一下'
+        },
+    ])
+    _compare([
+        {
+            'role': 'system',
+            'content': '这个是 system'
+        },
+        {
+            'role': 'user',
+            'content': '测试一下'
+        },
+    ])
+    _compare([
+        {
+            'role': 'user',
+            'content': 'foo'
+        },
+        {
+            'role': 'assistant',
+            'content': 'bar'
+        },
+        {
+            'role': 'user',
+            'content': 'baz'
+        },
+    ])
+    _compare([
+        {
+            'role': 'system',
+            'content': '这个是 system'
+        },
+        {
+            'role': 'user',
+            'content': 'foo'
+        },
+        {
+            'role': 'assistant',
+            'content': 'bar'
+        },
+        {
+            'role': 'user',
+            'content': 'baz'
+        },
+    ])
+
+
 def load_and_convert_to_model(model_folder: str = BAICHUAN2_13B_MODEL_FOLDER):
     with EmptyInitOnDevice():
         hf_model = load_hf_model(model_folder)

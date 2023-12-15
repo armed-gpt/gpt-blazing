@@ -483,10 +483,13 @@ def model_dispatch(
     input_pos: torch.Tensor,
     input_ids: torch.Tensor,
 ):
-    if input_pos[-1] < 2048:
-        func = func_2048
-    else:
+    if func_2048 is None:
         func = func_4096
+    else:
+        if input_pos[-1] < 2048:
+            func = func_2048
+        else:
+            func = func_4096
 
     # https://github.com/pytorch-labs/gpt-fast/issues/31
     with torch.inference_mode():

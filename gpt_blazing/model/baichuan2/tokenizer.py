@@ -11,7 +11,6 @@ class Baichuan2Tokenizer:
         self.sp_model = SentencePieceProcessor()
         self.sp_model.Load(model_file)
 
-        self.bos_token_id = 1
         self.eos_token_id = 2
 
         self.user_token_id = 195
@@ -21,7 +20,7 @@ class Baichuan2Tokenizer:
         return self.sp_model.tokenize(text)  # type: ignore
 
     def chat_tokenize(self, rounds: Sequence[Tuple[Role, str]]):
-        input_ids = [self.bos_token_id]
+        input_ids = []
 
         system = None
         if rounds[0][0] == Role.SYSTEM:
@@ -38,7 +37,6 @@ class Baichuan2Tokenizer:
                 input_ids.append(self.assistant_token_id)
             else:
                 raise NotImplementedError()
-            input_ids.append(self.bos_token_id)
             input_ids.extend(self.tokenize(text))
 
         assert rounds[-1][0] == Role.USER

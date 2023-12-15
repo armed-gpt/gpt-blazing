@@ -44,6 +44,9 @@ class ModelInference(Generic[_T_CONFIG]):
     def model_is_ready(self) -> bool:
         raise NotImplementedError()
 
+    def get_model_max_length(self) -> int:
+        raise NotImplementedError()
+
     def get_eos_token(self) -> int:
         raise NotImplementedError()
 
@@ -51,7 +54,7 @@ class ModelInference(Generic[_T_CONFIG]):
         self,
         rounds: Sequence[Tuple[Role, str]],
         cache_system: bool = False,
-    ) -> Tuple[torch.Tensor, int]:
+    ) -> Optional[Tuple[torch.Tensor, int]]:
         raise NotImplementedError()
 
     def model_decode_one_token(

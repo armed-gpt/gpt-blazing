@@ -18,6 +18,7 @@ def create_engine():
                 io.folder('$GPT_BLAZING_DATA/model/baichuan2-13b-chat/', expandvars=True)
             ),
             device='cuda:0',
+            use_dynamic_dispatch=True,
         )
     )
     model_inference.load_model()
@@ -35,7 +36,7 @@ def debug_engine():
     response = engine.generate([(Role.USER, "帮我写一篇与A股主题相关的作文，800字左右")])
     generate_dt_end = datetime.now()
     generate_total_seconds = (generate_dt_end - generate_dt_begin).total_seconds()
-    print('generate:', generate_total_seconds, response.num_tokens / generate_total_seconds)
+    print('generate:', generate_total_seconds, response.completion_tokens / generate_total_seconds)
 
     print(response.content)
 
@@ -51,12 +52,19 @@ def run_demo():
             continue
         rounds.append((Role.USER, content))
         generate_dt_begin = datetime.now()
-        response = engine.generate([(Role.USER, content)])
+        try:
+            response = engine.generate(rounds)
+        except Exception:
+            print('engine.generate failed.')
+            rounds = []
+            continue
         generate_dt_end = datetime.now()
         generate_total_seconds = (generate_dt_end - generate_dt_begin).total_seconds()
         print(
             f'[ASSISTANT]: {response.content}\n'
             f'(secs={generate_total_seconds}, '
-            f'tok/s={response.num_tokens/generate_total_seconds:.1f})'
+            f'prompt_tokens={response.prompt_tokens}, '
+            f'completion_tokens={response.completion_tokens}, '
+            f'tok/s={response.completion_tokens/generate_total_seconds:.1f})'
         )
         rounds.append((Role.ASSISTANT, response.content))

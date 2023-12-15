@@ -19,26 +19,34 @@ _default_generation_config = GenerationConfig()
 @attrs.define
 class Response:
     content: str
-    num_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
 
 
 class Engine:
 
     def __init__(self, model_inference: ModelInference):
+        assert model_inference.model_is_ready()
         self.model_inference = model_inference
-        self.eos_token = None
+        self.eos_token = model_inference.get_eos_token()
+        self.model_max_length = model_inference.get_model_max_length()
 
     def greedy_decode(
         self,
         logits: torch.Tensor,
-        end: int,
+        prompt_tokens: int,
         generation_config: GenerationConfig,
     ):
         sampled_ids: List[int] = []
 
-        input_pos = torch.tensor([end], device=logits.device, dtype=torch.int)
+        input_pos = torch.tensor([prompt_tokens], device=logits.device, dtype=torch.int)
         input_ids = torch.tensor([[0]], device=logits.device, dtype=torch.int)
-        for _ in range(generation_config.max_new_tokens):
+        for _ in range(
+            min(
+                generation_config.max_new_tokens,
+                self.model_max_length - prompt_tokens,
+            )
+        ):
             # [1, vocab_size]
             logits = logits[:, -1]
             # Greedy decode.
@@ -58,7 +66,8 @@ class Engine:
 
         return Response(
             content=self.model_inference.tokenizer_decode(sampled_ids),
-            num_tokens=len(sampled_ids),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=len(sampled_ids),
         )
 
     def generate(
@@ -66,19 +75,19 @@ class Engine:
         rounds: Sequence[Tuple[Role, str]],
         generation_config: Optional[GenerationConfig] = None,
     ):
-        if self.eos_token is None:
-            self.eos_token = self.model_inference.get_eos_token()
-
         if generation_config is None:
             generation_config = _default_generation_config
 
-        logits, end = self.model_inference.model_prefill(
+        model_prefill_result = self.model_inference.model_prefill(
             rounds=rounds,
             cache_system=generation_config.cache_system,
         )
+        if model_prefill_result is None:
+            raise RuntimeError('Prompt too long!')
+        logits, prompt_tokens = model_prefill_result
 
         if not generation_config.do_sample:
-            return self.greedy_decode(logits, end, generation_config)
+            return self.greedy_decode(logits, prompt_tokens, generation_config)
 
         else:
             raise NotImplementedError()
