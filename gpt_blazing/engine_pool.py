@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class Globals:
-    engine: Any = None
+    engine: Engine = None  # type: ignore
 
 
 def _initialize_engine(
@@ -72,10 +72,14 @@ def _engine_generate(
     rounds: Sequence[Tuple[Role, str]],
     generation_config: Optional[GenerationConfig],
 ):
-    return cast(Engine, Globals.engine).generate(
-        rounds=rounds,
-        generation_config=generation_config,
-    )
+    try:
+        return Globals.engine.generate(
+            rounds=rounds,
+            generation_config=generation_config,
+        )
+    except Exception:
+        logger.exception('_engine_generate failed.')
+        return None
 
 
 class EnginePool:
@@ -125,9 +129,11 @@ class EnginePool:
         generation_config: Optional[GenerationConfig] = None,
     ):
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
+        response = await loop.run_in_executor(
             self.executor,
             _engine_generate,
             rounds,
             generation_config,
         )
+        assert response is not None
+        return response
