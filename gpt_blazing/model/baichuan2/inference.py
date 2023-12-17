@@ -98,6 +98,7 @@ class Baichuan2ModelInferenceConfig:
     device: str = 'cuda:0'
     cache_capacity: int = 20
     use_dynamic_dispatch: bool = True
+    skip_torch_compile: bool = False
 
 
 class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
@@ -153,6 +154,15 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
 
     def compile_model(self) -> None:
         assert self.model_is_loaded
+
+        if self.config.skip_torch_compile:
+            logger.info('skip_torch_compile is set, abort. (only for debugging)')
+            self.prefill_4096 = model_prefill_4096
+            self.decode_one_token_4096 = model_decode_one_token_4096
+            self.prefill_2048 = None
+            self.decode_one_token_2048 = None
+            self.model_is_compiled = True
+            return
 
         logger.info('Compiling model...')
 

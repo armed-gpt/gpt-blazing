@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Tuple, Any, cast
+from typing import Optional, Sequence, Tuple, Any
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 from datetime import datetime
