@@ -14,14 +14,14 @@ from gpt_blazing.model.baichuan2.inference import (
 logger = logging.getLogger(__name__)
 
 
-def create_engine():
+def create_engine(**kwargs):  # type: ignore
     model_inference = Baichuan2ModelInference(
         Baichuan2ModelInferenceConfig(
             model_folder=str(
                 io.folder('$GPT_BLAZING_DATA/model/baichuan2-13b-chat/', expandvars=True)
             ),
             device='cuda:0',
-            # skip_torch_compile=True,
+            **kwargs,
         )
     )
     model_inference.load_model()
@@ -51,8 +51,8 @@ def debug_engine():
 def run_demo():
     engine = create_engine()
 
-    # generation_config = GenerationConfig(do_sample=True)
-    generation_config = GenerationConfig(do_sample=False)
+    # generation_config = GenerationConfig(do_sample=False)
+    generation_config = GenerationConfig(do_sample=True)
 
     rounds: List[Tuple[Role, str]] = []
     while True:

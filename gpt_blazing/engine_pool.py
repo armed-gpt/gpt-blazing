@@ -23,6 +23,7 @@ def _initialize_engine(
     finished_counter: Any,
     model_inference: ModelInference,
     devices: Sequence[str],
+    skip_torch_compile: bool,
 ):
     logging.basicConfig(
         format='%(asctime)s - (%(name)s)[%(process)d][%(levelname)s]: %(message)s',
@@ -48,7 +49,7 @@ def _initialize_engine(
             assert model_inference.model_is_ready()
             logger.info(f'worker_idx={worker_idx} model compiled!')
 
-            Globals.engine = Engine(model_inference)
+            Globals.engine = Engine(model_inference, skip_torch_compile=skip_torch_compile)
             logger.info(f'worker_idx={worker_idx} engine initialized!')
 
             with condition:
@@ -88,6 +89,7 @@ class EnginePool:
         self,
         model_inference: ModelInference,
         devices: Sequence[str],
+        skip_torch_compile: bool = False,
     ):
         self.manager = multiprocessing.Manager()
         condition = self.manager.Condition()
@@ -106,6 +108,7 @@ class EnginePool:
                 finished_counter,
                 model_inference,
                 devices,
+                skip_torch_compile,
             ),
             # NOTE: CUDA does not support fork mode.
             mp_context=multiprocessing.get_context('spawn'),
