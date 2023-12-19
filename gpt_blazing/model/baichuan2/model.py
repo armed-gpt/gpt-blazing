@@ -301,7 +301,7 @@ class Baichuan2Model(torch.nn.Module):
 
         logits = self.lm_head(hidden_states)
 
-        return logits
+        return logits, hidden_states
 
 
 def dynamically_quantize_per_channel(x, quant_min, quant_max, target_dtype):  # type: ignore
@@ -437,8 +437,7 @@ def model_prefill_2048(
     input_pos: torch.Tensor,
     input_ids: torch.Tensor,
 ):
-    logits = model(input_pos=input_pos, end=2048, input_ids=input_ids)
-    return logits
+    return model(input_pos=input_pos, end=2048, input_ids=input_ids)
 
 
 def model_prefill_4096(
@@ -446,8 +445,7 @@ def model_prefill_4096(
     input_pos: torch.Tensor,
     input_ids: torch.Tensor,
 ):
-    logits = model(input_pos=input_pos, end=4096, input_ids=input_ids)
-    return logits
+    return model(input_pos=input_pos, end=4096, input_ids=input_ids)
 
 
 def compile_model_prefill(func):  # type: ignore
@@ -459,8 +457,7 @@ def model_decode_one_token_2048(
     input_pos: torch.Tensor,
     input_ids: torch.Tensor,
 ):
-    logits = model(input_pos=input_pos, end=2048, input_ids=input_ids)
-    return logits
+    return model(input_pos=input_pos, end=2048, input_ids=input_ids)
 
 
 def model_decode_one_token_4096(
@@ -468,8 +465,7 @@ def model_decode_one_token_4096(
     input_pos: torch.Tensor,
     input_ids: torch.Tensor,
 ):
-    logits = model(input_pos=input_pos, end=4096, input_ids=input_ids)
-    return logits
+    return model(input_pos=input_pos, end=4096, input_ids=input_ids)
 
 
 def compile_model_decode_one_token(func):  # type: ignore
@@ -498,7 +494,10 @@ def model_dispatch(
             enable_mem_efficient=False,
             enable_math=True,
         ):
-            return func(model, input_pos, input_ids).detach()
+            logits, hidden_states = func(model, input_pos, input_ids)
+            logits = logits.detach()
+            hidden_states = hidden_states.detach()
+            return logits, hidden_states
 
 
 def model_get_cache(

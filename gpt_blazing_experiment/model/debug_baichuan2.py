@@ -334,7 +334,7 @@ fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
             enable_mem_efficient=False,
             enable_math=True,
         ):
-            logits = model(input_pos=input_pos, end=2048, input_ids=input_ids)
+            logits, _ = model(input_pos=input_pos, end=2048, input_ids=input_ids)
 
     print('Saving to', output_file)
     torch.save(logits, output_file)
@@ -528,7 +528,7 @@ def debug_greedy_decoding_performance():
     output_ids = []
 
     prefill_dt_begin = datetime.now()
-    logits = model_dispatch(
+    logits, _ = model_dispatch(
         model=model,
         func_2048=prefill_2048,
         func_4096=prefill_4096,
@@ -549,7 +549,7 @@ def debug_greedy_decoding_performance():
 
     # while input_pos[0] < 1024:
     while input_pos[0] < 1024:
-        logits = model_dispatch(
+        logits, _ = model_dispatch(
             model=model,
             func_2048=decode_one_token_2048,
             func_4096=decode_one_token_4096,

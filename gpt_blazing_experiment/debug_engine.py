@@ -22,7 +22,7 @@ def create_engine(**kwargs):  # type: ignore
             ),
             device='cuda:0',
             **kwargs,
-        )
+        ),
     )
     model_inference.load_model()
     model_inference.compile_model()
@@ -49,10 +49,17 @@ def debug_engine():
 
 
 def run_demo():
+    # engine = create_engine(skip_torch_compile=True)
     engine = create_engine()
 
-    # generation_config = GenerationConfig(do_sample=False)
-    generation_config = GenerationConfig(do_sample=True)
+    generation_config = GenerationConfig(
+        do_sample=False,
+        contrastive_penalty_alpha=0.0,
+        # top_k=6,
+        # contrastive_penalty_alpha=0.6,
+        # contrastive_similarity_thr=0.4,
+    )
+    # generation_config = GenerationConfig(do_sample=True)
 
     rounds: List[Tuple[Role, str]] = []
     while True:

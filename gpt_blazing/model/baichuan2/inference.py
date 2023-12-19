@@ -157,10 +157,13 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
 
         if self.config.skip_torch_compile:
             logger.info('skip_torch_compile is set, abort. (only for debugging)')
+
             self.prefill_4096 = model_prefill_4096
             self.decode_one_token_4096 = model_decode_one_token_4096
+
             self.prefill_2048 = None
             self.decode_one_token_2048 = None
+
             self.model_is_compiled = True
             return
 
@@ -173,7 +176,6 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
         self.decode_one_token_2048 = None
 
         if self.config.use_dynamic_dispatch:
-            # NOTE: I'm not sure if this setting is buggy, will need more time to investigate.
             self.prefill_2048 = compile_model_prefill(model_prefill_2048)
             self.decode_one_token_2048 = compile_model_decode_one_token(model_decode_one_token_2048)
 
@@ -244,6 +246,9 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
     def get_model_max_length(self):
         return self.model_max_length
 
+    def get_hidden_size(self):
+        return self.config.model_config.hidden_size
+
     def model_prefill(self, rounds: Sequence[Tuple[Role, str]], cache_system: bool = False):
         input_ids = None
         system = None
@@ -286,7 +291,7 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
 
         input_pos = torch.arange(begin, end, device=self.device, dtype=torch.int)
         input_ids = torch.tensor([input_ids], dtype=torch.int, device=self.device)
-        logits = model_dispatch(
+        logits, hidden_states = model_dispatch(
             model=self.model,
             func_2048=self.prefill_2048,
             func_4096=self.prefill_4096,
@@ -302,17 +307,17 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
                 (num_system_tokens, model_get_cache(self.model, num_system_tokens)),
             )
 
-        return logits, end
+        return logits, hidden_states, end
 
     def model_decode_one_token(self, input_pos: torch.Tensor, input_ids: torch.Tensor):
-        logits = model_dispatch(
+        logits, hidden_states = model_dispatch(
             model=self.model,
             func_2048=self.decode_one_token_2048,
             func_4096=self.decode_one_token_4096,
             input_pos=input_pos,
             input_ids=input_ids,
         )
-        return logits
+        return logits, hidden_states
 
     def tokenizer_decode(self, tokens: Sequence[int]):
         return self.tokenizer.decode(tokens)

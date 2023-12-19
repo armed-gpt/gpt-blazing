@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Tuple, List, Callable, TypeVar
+from typing import Optional, Sequence, Tuple, List, Callable, TypeVar, Set
 import logging
 
 import attrs
@@ -17,9 +17,11 @@ class GenerationConfig:
     do_sample: bool = False
     # Control logits.
     temperature: float = 1.0
-    top_k: int = 40
     top_p: float = 1.0
-    contrastive_penalty_alpha: Optional[float] = 0.6
+    top_k: int = 6
+    contrastive_penalty_alpha: float = 0.0
+    contrastive_context_size: int = 20
+    contrastive_similarity_thr: float = 0.95
     # Control cache.
     cache_system: bool = True
 
@@ -70,7 +72,7 @@ def torch_strategy_sample_sample_from_logits(
 _T_FUNC = TypeVar('_T_FUNC')
 
 
-def torch_compile_func_sample_from_logits(func: _T_FUNC) -> _T_FUNC:
+def torch_compile_opt(func: _T_FUNC) -> _T_FUNC:
     # fullgraph can not be set here.
     return torch.compile(func, dynamic=True)  # type: ignore
 
@@ -86,14 +88,18 @@ class Engine:
         self.model_inference = model_inference
         self.eos_token = model_inference.get_eos_token()
         self.model_max_length = model_inference.get_model_max_length()
+        self.hidden_size = model_inference.get_hidden_size()
+
+        # For contrastive search.
+        self.contrastive_prev_norm_hidden_states: Optional[torch.Tensor] = None
 
         if not skip_torch_compile:
             logger.info('Compiling engine opts...')
             self.torch_strategy_greedy_sample_from_logits = \
-                torch_compile_func_sample_from_logits(torch_strategy_greedy_sample_from_logits)
+                torch_compile_opt(torch_strategy_greedy_sample_from_logits)
 
             self.torch_strategy_sample_sample_from_logits = \
-                torch_compile_func_sample_from_logits(torch_strategy_sample_sample_from_logits)
+                torch_compile_opt(torch_strategy_sample_sample_from_logits)
 
             for warmup_generation_config in [
                 GenerationConfig(do_sample=True),
@@ -128,7 +134,7 @@ class Engine:
             self.model_max_length - num_prompt_tokens,
         )
 
-    def strategy_procedure_sample_one_token(
+    def strategy_procedure_sample_token_based_on_current_logits(
         self,
         func_sample_from_logits: Callable[[torch.Tensor, GenerationConfig], int],
         logits: torch.Tensor,
@@ -140,14 +146,13 @@ class Engine:
         input_pos = torch.tensor([num_prompt_tokens], device=logits.device, dtype=torch.int)
         input_ids = torch.tensor([[0]], device=logits.device, dtype=torch.int)
         for _ in range(self.get_current_max_new_tokens(num_prompt_tokens, generation_config)):
-            with torch.inference_mode():
-                sampled_id = func_sample_from_logits(logits, generation_config)
+            sampled_id = func_sample_from_logits(logits, generation_config)
             if sampled_id == self.eos_token:
                 break
             sampled_ids.append(sampled_id)
             # Get next logits.
             input_ids[0][0] = sampled_id
-            logits = self.model_inference.model_decode_one_token(
+            logits, _ = self.model_inference.model_decode_one_token(
                 input_pos=input_pos,
                 input_ids=input_ids,
             )
@@ -171,28 +176,16 @@ class Engine:
     def strategy_greedy(
         self,
         logits: torch.Tensor,
+        hidden_states: torch.Tensor,
         num_prompt_tokens: int,
         generation_config: GenerationConfig,
     ):
-        return self.strategy_procedure_sample_one_token(
+        return self.strategy_procedure_sample_token_based_on_current_logits(
             func_sample_from_logits=self.strategy_greedy_sample_from_logits,
             logits=logits,
             num_prompt_tokens=num_prompt_tokens,
             generation_config=generation_config,
         )
-
-    def strategy_contrastive(
-        self,
-        logits: torch.Tensor,
-        num_prompt_tokens: int,
-        generation_config: GenerationConfig,
-    ):
-        '''
-        TODO
-        Su and Collier, 2022 "Contrastive Search Is What You Need For Neural Text Generation"
-        https://huggingface.co/blog/introducing-csearch
-        https://github.com/huggingface/transformers/blob/238d2e3c44366aba9dc5c770c95475765a6725cb/src/transformers/generation/utils.py#L1968
-        ''' # noqa
 
     def strategy_sample_sample_from_logits(
         self,
@@ -208,14 +201,149 @@ class Engine:
     def strategy_sample(
         self,
         logits: torch.Tensor,
+        hidden_states: torch.Tensor,
         num_prompt_tokens: int,
         generation_config: GenerationConfig,
     ):
-        return self.strategy_procedure_sample_one_token(
+        return self.strategy_procedure_sample_token_based_on_current_logits(
             func_sample_from_logits=self.strategy_sample_sample_from_logits,
             logits=logits,
             num_prompt_tokens=num_prompt_tokens,
             generation_config=generation_config,
+        )
+
+    def prepare_contrastive_search(
+        self,
+        hidden_states: torch.Tensor,
+        generation_config: GenerationConfig,
+    ):
+        context_size = generation_config.contrastive_context_size
+        if (
+            self.contrastive_prev_norm_hidden_states is not None
+            and self.contrastive_prev_norm_hidden_states.size(0) >= context_size
+        ):
+            return
+
+        self.contrastive_prev_norm_hidden_states = torch.empty(
+            (context_size, self.hidden_size),
+            dtype=hidden_states.dtype,
+            device=hidden_states.device,
+        )
+
+    def strategy_contrastive(
+        self,
+        logits: torch.Tensor,
+        hidden_states: torch.Tensor,
+        num_prompt_tokens: int,
+        generation_config: GenerationConfig,
+    ):
+        self.prepare_contrastive_search(hidden_states, generation_config)
+
+        prev_norm_hidden_states = self.contrastive_prev_norm_hidden_states
+        assert prev_norm_hidden_states is not None
+
+        # [1, hidden_size]
+        hidden_states = hidden_states[0, -1].unsqueeze(0)
+        hidden_states /= hidden_states.norm()
+        prev_norm_hidden_states[0] = hidden_states
+        del hidden_states
+        prev_norm_hidden_states_pos = 1
+
+        top_k = generation_config.top_k
+        assert top_k > 0
+        top_k = min(top_k, logits.size(-1))
+
+        penalty_alpha = generation_config.contrastive_penalty_alpha
+        assert penalty_alpha > 0
+
+        similarity_thr = generation_config.contrastive_similarity_thr
+
+        sampled_ids: List[int] = []
+
+        input_pos = torch.tensor([num_prompt_tokens], device=logits.device, dtype=torch.int)
+        input_ids = torch.tensor([[0]], device=logits.device, dtype=torch.int)
+
+        for _ in range(self.get_current_max_new_tokens(num_prompt_tokens, generation_config)):
+            logits = logits[0, -1]
+
+            top_k_values, top_k_indices = torch.topk(logits, top_k)
+            top_k_probs = torch.softmax(top_k_values, dim=-1)
+            scores = (1 - penalty_alpha) * top_k_probs
+
+            sampled_id: Optional[int] = None
+            sampled_id_to_next_logits = {}
+            sampled_id_to_next_hidden_states = {}
+
+            visited_sampled_ids: Set[int] = set()
+
+            if prev_norm_hidden_states_pos < prev_norm_hidden_states.size(0):
+                # [T, hidden_size]
+                prev_norm_hidden_states = prev_norm_hidden_states[:prev_norm_hidden_states_pos]
+
+            for top_k_idx in range(top_k):
+                idx_in_top_k = torch.argmax(scores)
+                cur_sampled_id = int(top_k_indices[idx_in_top_k])
+
+                if cur_sampled_id in visited_sampled_ids:
+                    # Search previously, meaning this one has the highest score.
+                    sampled_id = cur_sampled_id
+                    break
+                visited_sampled_ids.add(cur_sampled_id)
+
+                # Get next logits.
+                input_ids[0][0] = cur_sampled_id
+                cur_next_logits, cur_next_hidden_states = \
+                    self.model_inference.model_decode_one_token(
+                        input_pos=input_pos,
+                        input_ids=input_ids,
+                    )
+
+                # [1, hidden_size]
+                cur_next_hidden_states = cur_next_hidden_states[0, -1].unsqueeze(0)
+                cur_next_hidden_states /= cur_next_hidden_states.norm()
+
+                # [1, T]
+                cosine_matrix = torch.matmul(
+                    cur_next_hidden_states,
+                    prev_norm_hidden_states.transpose(0, 1),
+                )
+                similarity = torch.max(cosine_matrix)
+                # Update degeneration penalty.
+                scores[idx_in_top_k] -= penalty_alpha * similarity
+
+                sampled_id_to_next_logits[cur_sampled_id] = cur_next_logits
+                sampled_id_to_next_hidden_states[cur_sampled_id] = cur_next_hidden_states
+
+                if similarity < similarity_thr:
+                    # Most similarity should be small.
+                    sampled_id = cur_sampled_id
+                    break
+
+                if top_k_idx == top_k - 1:
+                    # Last one.
+                    sampled_id = cur_sampled_id
+
+            assert sampled_id is not None
+
+            if sampled_id == self.eos_token:
+                break
+            sampled_ids.append(sampled_id)
+
+            logits = sampled_id_to_next_logits[sampled_id]
+
+            hidden_states = sampled_id_to_next_hidden_states[sampled_id]
+            mod_pos = prev_norm_hidden_states_pos % prev_norm_hidden_states.size(0)
+            prev_norm_hidden_states[mod_pos] = hidden_states[0]
+            prev_norm_hidden_states_pos += 1
+
+            input_pos += 1
+
+        return Response(
+            succeeded=True,
+            error_message='',
+            content=self.model_inference.tokenizer_decode(sampled_ids),
+            num_prompt_tokens=num_prompt_tokens,
+            num_completion_tokens=len(sampled_ids),
         )
 
     def generate(
@@ -239,11 +367,20 @@ class Engine:
                 num_completion_tokens=-1,
             )
 
-        logits, num_prompt_tokens = model_prefill_result
+        logits, hidden_states, num_prompt_tokens = model_prefill_result
 
         if not generation_config.do_sample:
-            func_strategy = self.strategy_greedy
+            if generation_config.contrastive_penalty_alpha > 0:
+                func_strategy = self.strategy_contrastive
+            else:
+                func_strategy = self.strategy_greedy
         else:
             func_strategy = self.strategy_sample
 
-        return func_strategy(logits, num_prompt_tokens, generation_config)
+        with torch.inference_mode():
+            return func_strategy(
+                logits=logits,
+                hidden_states=hidden_states,
+                num_prompt_tokens=num_prompt_tokens,
+                generation_config=generation_config,
+            )
