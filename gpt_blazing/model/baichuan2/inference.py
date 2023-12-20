@@ -94,7 +94,7 @@ class LruCache:
 class Baichuan2ModelInferenceConfig:
     model_folder: str
     model_config: Baichuan2ModelConfig = attrs.field(factory=Baichuan2ModelConfig)
-    quantization_mode: QuantizationMode = QuantizationMode.Q8
+    quantization_mode: QuantizationMode = QuantizationMode.INT8
     device: str = 'cuda:0'
     cache_capacity: int = 20
     use_dynamic_dispatch: bool = True
@@ -131,11 +131,11 @@ class Baichuan2ModelInference(ModelInference[Baichuan2ModelInferenceConfig]):
         model_fd = io.folder(self.config.model_folder, exists=True)
 
         # TODO: support more modes.
-        assert self.config.quantization_mode == QuantizationMode.Q8
+        assert self.config.quantization_mode == QuantizationMode.INT8
 
         model_pt = str(model_fd / f'{self.config.quantization_mode.value}.pt')
         logger.info(f'Loading model_pt={model_pt}')
-        self.model = load_model(model_pt=model_pt, config=self.config.model_config, q8=True)
+        self.model = load_model(model_pt=model_pt, config=self.config.model_config, int8=True)
         logger.info('Model loaded.')
 
         tokenizer_model = str(model_fd / 'tokenizer.model')

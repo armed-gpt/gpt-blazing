@@ -11,6 +11,7 @@ from gpt_blazing.model.baichuan2.model import (
     Baichuan2Model,
     Baichuan2ModelConfig,
     quantize_int8,
+    quantize_fp8,
     EmptyInitOnDevice,
     load_model,
     model_prefill_2048,
@@ -290,33 +291,47 @@ def save_model_logits(
     output_file: str,
     model_folder: str = BAICHUAN2_13B_MODEL_FOLDER,
     compile: bool = False,
-    q8: bool = False,
+    int8: bool = False,
+    fp8: bool = False,
 ):
     '''
-fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
+fib gpt_blazing_experiment/model/debug_baichuan2.py:save_model_logits \
     --output_file="$GPT_BLAZING_DATA/model/baichuan2/logits.pt"
 
-fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
-    --output_file="$GPT_BLAZING_DATA/model/baichuan2/q8_logits.pt" \
-    --q8
+fib gpt_blazing_experiment/model/debug_baichuan2.py:save_model_logits \
+    --output_file="$GPT_BLAZING_DATA/model/baichuan2/int8_logits.pt" \
+    --int8
 
-fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
+fib gpt_blazing_experiment/model/debug_baichuan2.py:save_model_logits \
+    --output_file="$GPT_BLAZING_DATA/model/baichuan2/fp8_logits.pt" \
+    --fp8
+
+fib gpt_blazing_experiment/model/debug_baichuan2.py:save_model_logits \
     --output_file="$GPT_BLAZING_DATA/model/baichuan2/compiled_logits.pt" \
     --compile
 
-fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
-    --output_file="$GPT_BLAZING_DATA/model/baichuan2/compiled_q8_logits.pt" \
+fib gpt_blazing_experiment/model/debug_baichuan2.py:save_model_logits \
+    --output_file="$GPT_BLAZING_DATA/model/baichuan2/compiled_int8_logits.pt" \
     --compile \
-    --q8
+    --int8
+
+# 'fp8e4nv data type is not supported on CUDA arch < 89'
+fib gpt_blazing_experiment/model/debug_baichuan2.py:save_model_logits \
+    --output_file="$GPT_BLAZING_DATA/model/baichuan2/compiled_fp8_logits.pt" \
+    --compile \
+    --fp8
     '''
     print('Loading...')
     model = load_and_convert_to_model(model_folder)
 
-    if q8:
-        print('Quantizing...')
+    if int8:
+        print('Quantizing (int8) ...')
         model = quantize_int8(model)
+    elif fp8:
+        print('Quantizing (fp8) ...')
+        model = quantize_fp8(model)
 
-    if not q8:
+    if not (int8 or fp8):
         move_model_to_devices(model, [('cuda:0', 0), ('cuda:1', 20)])  # type: ignore
     else:
         model = model.to('cuda:0')  # type: ignore
@@ -343,19 +358,19 @@ fib gpt_blazing_model/baichuan2/debug.py:save_model_logits \
 def save_hf_model_logits(
     output_file: str,
     model_folder: str = BAICHUAN2_13B_MODEL_FOLDER,
-    q8: bool = False,
+    int8: bool = False,
 ):
     '''
-fib gpt_blazing_model/baichuan2/debug.py:save_hf_model_logits \
+fib gpt_blazing_experiment/model/debug_baichuan2.py:save_hf_model_logits \
     --output_file="$GPT_BLAZING_DATA/model/baichuan2/hf_logits.pt"
 
-fib gpt_blazing_model/baichuan2/debug.py:save_hf_model_logits \
-    --output_file="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt" \
-    --q8
+fib gpt_blazing_experiment/model/debug_baichuan2.py:save_hf_model_logits \
+    --output_file="$GPT_BLAZING_DATA/model/baichuan2/int8_hf_logits.pt" \
+    --int8
     '''
     print('Loading...')
     with EmptyInitOnDevice():
-        if not q8:
+        if not int8:
             import os
             os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
             hf_model = load_hf_model(model_folder, device_map='auto')
@@ -385,29 +400,39 @@ def get_top_p_sorted_indices(logits: torch.Tensor, top_p: float = 0.9):
 def compare_logits(file0: str, file1: str):
     '''
 # 1.
-fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
+fib gpt_blazing_experiment/model/debug_baichuan2.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/hf_logits.pt"
 
-# 0.9943
-fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
+# 0.9942
+fib gpt_blazing_experiment/model/debug_baichuan2.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
-    --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt"
+    --file1="$GPT_BLAZING_DATA/model/baichuan2/fp8_logits.pt"
 
-# 0.9949
-fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
+# 0.9942
+fib gpt_blazing_experiment/model/debug_baichuan2.py:compare_logits \
+    --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
+    --file1="$GPT_BLAZING_DATA/model/baichuan2/int8_logits.pt"
+
+# 0.9945
+fib gpt_blazing_experiment/model/debug_baichuan2.py:compare_logits \
+    --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
+    --file1="$GPT_BLAZING_DATA/model/baichuan2/int8_hf_logits.pt"
+
+# 0.9939
+fib gpt_blazing_experiment/model/debug_baichuan2.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
     --file1="$GPT_BLAZING_DATA/model/baichuan2/compiled_logits.pt"
 
-# 0.9945
-fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
+# 0.9939
+fib gpt_blazing_experiment/model/debug_baichuan2.py:compare_logits \
     --file0="$GPT_BLAZING_DATA/model/baichuan2/logits.pt" \
-    --file1="$GPT_BLAZING_DATA/model/baichuan2/compiled_q8_logits.pt"
+    --file1="$GPT_BLAZING_DATA/model/baichuan2/compiled_int8_logits.pt"
 
-# 0.9943
-fib gpt_blazing_model/baichuan2/debug.py:compare_logits \
-    --file0="$GPT_BLAZING_DATA/model/baichuan2/compiled_q8_logits.pt" \
-    --file1="$GPT_BLAZING_DATA/model/baichuan2/q8_hf_logits.pt"
+# 0.9938
+fib gpt_blazing_experiment/model/debug_baichuan2.py:compare_logits \
+    --file0="$GPT_BLAZING_DATA/model/baichuan2/compiled_int8_logits.pt" \
+    --file1="$GPT_BLAZING_DATA/model/baichuan2/int8_hf_logits.pt"
     '''
     logits0 = torch.load(file0, map_location='cuda:0')
     logits1 = torch.load(file1, map_location='cuda:0')
@@ -449,8 +474,10 @@ def timed(fn):  # type: ignore
 def debug_greedy_decoding_performance():
     print('Loading...')
     model = load_model(
-        model_pt=str(io.file("$GPT_BLAZING_DATA/model/baichuan2/13b-q8.pt", expandvars=True)),
-        q8=True,
+        model_pt=str(
+            io.file("$GPT_BLAZING_DATA/model/baichuan2-13b-chat/int8.pt", expandvars=True)
+        ),
+        int8=True,
         config=Baichuan2ModelConfig(debug=False),
     )
     model.to('cuda:0')
@@ -579,8 +606,8 @@ def debug_greedy_decoding_performance():
 def debug_encoding_performance():
     print('Loading...')
     model = load_model(
-        model_pt=str(io.file("$GPT_BLAZING_DATA/model/baichuan2/13b-q8.pt", expandvars=True)),
-        q8=True,
+        model_pt=str(io.file("$GPT_BLAZING_DATA/model/baichuan2/13b-int8.pt", expandvars=True)),
+        int8=True,
         config=Baichuan2ModelConfig(debug=False),
     )
     model.to('cuda:0')
@@ -843,15 +870,15 @@ suffix:
 def export_model(
     output_file: str,
     model_folder: str = BAICHUAN2_13B_MODEL_FOLDER,
-    q8: bool = False,
+    int8: bool = False,
 ):
     '''
-fib gpt_blazing_model/baichuan2/debug.py:export_model \
-    --output_file="$GPT_BLAZING_DATA/model/baichuan2-13b-chat/q8.pt" \
-    --q8
+fib gpt_blazing_experiment/model/debug_baichuan2.py:export_model \
+    --output_file="$GPT_BLAZING_DATA/model/baichuan2-13b-chat/int8.pt" \
+    --int8
     '''
     model = load_and_convert_to_model(model_folder)
-    if q8:
+    if int8:
         model = quantize_int8(model)
 
     torch.save(model.state_dict(), output_file)

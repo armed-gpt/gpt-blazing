@@ -6,7 +6,8 @@ import torch
 
 @unique
 class QuantizationMode(Enum):
-    Q8 = 'q8'
+    INT8 = 'int8'
+    FP8 = 'fp8'
 
 
 @unique

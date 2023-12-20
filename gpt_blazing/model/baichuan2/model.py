@@ -361,6 +361,29 @@ class WeightOnlyInt8Linear(torch.nn.Module):
         return F.linear(input, self.weight.to(dtype=input.dtype)) * self.scales
 
 
+class WeightOnlyFp8Linear(torch.nn.Module):
+    __constants__ = ['in_features', 'out_features']
+    in_features: int
+    out_features: int
+    weight: torch.Tensor
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+    ) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.register_buffer(
+            "weight",
+            torch.empty((out_features, in_features), dtype=torch.float8_e4m3fn),
+        )
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return F.linear(input, self.weight.to(dtype=input.dtype))
+
+
 # http://www.lernapparat.de/faster-model-init
 class EmptyInitOnDevice(torch.overrides.TorchFunctionMode):  # type: ignore
 
@@ -406,15 +429,42 @@ def replace_linear_weight_only_int8_per_channel(module, struct_only):  # type: i
             replace_linear_weight_only_int8_per_channel(child, struct_only)
 
 
+def replace_linear_weight_only_fp8_per_channel(module, struct_only):  # type: ignore
+    for name, child in module.named_children():
+        if isinstance(child, nn.Linear):
+            assert not child.bias
+
+            with EmptyInitOnDevice():
+                fp8_linear = WeightOnlyFp8Linear(child.in_features, child.out_features)
+
+            if not struct_only:
+                with torch.no_grad():
+                    fp8_weight = child.weight.to(torch.float8_e4m3fn)
+                fp8_linear.load_state_dict({
+                    'weight': fp8_weight,
+                })
+
+            setattr(module, name, fp8_linear)
+
+        else:
+            replace_linear_weight_only_fp8_per_channel(child, struct_only)
+
+
 def quantize_int8(model: Baichuan2Model, struct_only: bool = False):
     replace_linear_weight_only_int8_per_channel(model, struct_only)
+    return model
+
+
+def quantize_fp8(model: Baichuan2Model, struct_only: bool = False):
+    replace_linear_weight_only_fp8_per_channel(model, struct_only)
     return model
 
 
 def load_model(
     model_pt: str,
     config: Optional[Baichuan2ModelConfig] = None,
-    q8: bool = True,
+    int8: bool = True,
+    fp8: bool = False,
 ):
     if config is None:
         config = Baichuan2ModelConfig()
@@ -424,8 +474,10 @@ def load_model(
     model.eval()
     model.bfloat16()
 
-    if q8:
+    if int8:
         model = quantize_int8(model, struct_only=True)
+    elif fp8:
+        model = quantize_fp8(model, struct_only=True)
 
     model.load_state_dict(torch.load(model_pt, map_location='cpu'))
 
