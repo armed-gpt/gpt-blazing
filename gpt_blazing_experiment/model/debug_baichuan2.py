@@ -46,7 +46,7 @@ def load_hf_model(
 
     return AutoModelForCausalLM.from_pretrained(
         model_folder,
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         device_map=device_map,
     )

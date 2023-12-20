@@ -4,10 +4,13 @@ from .model import Baichuan2ModelConfig, Baichuan2Model, EmptyInitOnDevice
 
 
 def convert_hf_model_to_model(hf_model: Any):
+    import torch
+
     with EmptyInitOnDevice():
         model = Baichuan2Model(Baichuan2ModelConfig(debug=True))
-        model.half()
+        model.bfloat16()
 
+    assert hf_model.dtype == torch.bfloat16  # type: ignore
     baichuan_model = hf_model.model
 
     model.embed_tokens.load_state_dict(baichuan_model.embed_tokens.state_dict())

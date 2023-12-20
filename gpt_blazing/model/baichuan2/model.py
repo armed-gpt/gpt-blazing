@@ -355,7 +355,7 @@ class WeightOnlyInt8Linear(torch.nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.register_buffer("weight", torch.empty((out_features, in_features), dtype=torch.int8))
-        self.register_buffer("scales", torch.ones(out_features, dtype=torch.float16))
+        self.register_buffer("scales", torch.ones(out_features, dtype=torch.bfloat16))
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.linear(input, self.weight.to(dtype=input.dtype)) * self.scales
@@ -422,7 +422,7 @@ def load_model(
     with EmptyInitOnDevice():
         model = Baichuan2Model(config)
     model.eval()
-    model.half()
+    model.bfloat16()
 
     if q8:
         model = quantize_int8(model, struct_only=True)
