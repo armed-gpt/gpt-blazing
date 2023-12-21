@@ -8,7 +8,6 @@ from torch.nn import functional as F
 import torch.utils._device
 
 
-# Defaults to 13b.
 @attrs.define
 class Baichuan2ModelConfig:
     hidden_size: int = 5120
