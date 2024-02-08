@@ -5,8 +5,8 @@ This project draws inspiration from [gpt-fast](https://github.com/pytorch-labs/g
 ## Installation
 
 ```bash
-pip install --pre torch==2.2.0.dev20231207 --index-url https://download.pytorch.org/whl/nightly/cu118
-pip install --pre gpt-blazing
+pip install torch>=2.2.0 --index-url https://download.pytorch.org/whl/cu118
+pip install gpt-blazing
 ```
 
 ## Usage
